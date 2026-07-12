@@ -1,0 +1,28 @@
+{
+  "WebFetch::call::url=https://ziglang.org/download/0.16.0/release-notes.html": {
+    "callCount": 1,
+    "learned": false,
+    "bestMs": 32431,
+    "firstSlowAt": "2026-04-16T18:02:15.384Z",
+    "firstSlowMs": 32431
+  },
+  "Read::call::default": {
+    "callCount": 9,
+    "learned": true,
+    "bestMs": 14,
+    "firstSlowAt": "2026-04-16T18:04:58.314Z",
+    "firstSlowMs": 2844
+  },
+  "Grep::call::pattern=0\\.15\\.x|0\\.15\\.2": {
+    "callCount": 1,
+    "learned": false,
+    "bestMs": 33
+  },
+  "WebFetch::call::url=https://ziglang.org/download/0.16.0/release-notes.html#toc-Language-Changes": {
+    "callCount": 1,
+    "learned": false,
+    "bestMs": 105039,
+    "firstSlowAt": "2026-04-16T23:33:08.912Z",
+    "firstSlowMs": 105039
+  }
+}
