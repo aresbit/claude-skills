@@ -321,6 +321,27 @@ const result = try std.process.run(allocator, io, .{ ... });
 const err = std.process.replace(io, .{ .argv = argv });
 ```
 
+### Environment Variables
+
+`std.process.getEnvVarOwned` / `getEnvMap` / `hasEnvVar` are **REMOVED**. The
+environment now arrives through the main function's `Init` parameter — there is no
+global accessor, so a function that needs env vars must be passed the map.
+
+```zig
+// WRONG - removed
+const val = try std.process.getEnvVarOwned(gpa, "OSS_AK");
+var env = try std.process.getEnvMap(gpa);
+
+// CORRECT - via Init (no allocation, no free; borrowed from the map)
+pub fn main(init: std.process.Init) !void {
+    const val = init.environ_map.get("OSS_AK") orelse return error.MissingVar;
+    // `Init.Minimal` variant exposes `init.minimal.environ` instead
+}
+```
+
+`Init.environ_map` is a `*Environ.Map` and is documented **not threadsafe** — read
+what you need up front rather than calling `.get()` from worker threads.
+
 ### `posix` and `os.windows` Removals
 
 Most `std.posix` and `std.os.windows` medium-level functions removed. Choose:
@@ -651,6 +672,8 @@ Structs, unions, enums, and opaques are only resolved when size or field type is
 | `std.fs.cwd().openFile(...)` | Use `std.Io.Dir.cwd().openFile(io, ...)` |
 | `std.Thread.Mutex` / `WaitGroup` | Use `std.Io.Mutex` / `std.Io.Group` |
 | `std.crypto.random.bytes` | Use `io.random(&buffer)` |
+| `struct 'crypto' has no member named 'hmac'` | MACs are under `auth`: `std.crypto.auth.hmac.HmacSha1` |
+| `struct 'process' has no member named 'getEnvVarOwned'` | Removed — use `init.environ_map.get("NAME")` from `std.process.Init` |
 | `std.time.Instant` | Use `std.Io.Timestamp` |
 | `std.once` | Removed — avoid globals or hand-roll |
 | `std.process.Child.run` | Use `std.process.run(io, allocator, .{...})` |
@@ -763,6 +786,21 @@ Load these references when working with specific modules:
 
 ### Security & Cryptography
 - **[std.crypto](references/std-crypto.md)** - Hashing (SHA2, SHA3, Blake3), AEAD (AES-GCM, ChaCha20-Poly1305), signatures (Ed25519, ECDSA), key exchange (X25519), password hashing (Argon2, scrypt, bcrypt), secure random, timing-safe operations
+
+**Namespace depth trips people up** — MACs live under `crypto.auth`, not `crypto`
+directly, and hashes are grouped by family:
+
+```zig
+std.crypto.auth.hmac.HmacSha1          // NOT std.crypto.hmac.HmacSha1
+std.crypto.auth.hmac.HmacMd5
+std.crypto.auth.hmac.sha2.HmacSha256   // sha2 family is one level deeper
+std.crypto.hash.Sha1                   // hashes: crypto.hash.*
+std.crypto.hash.sha2.Sha256
+```
+
+`HmacSha1` is the one to reach for when implementing AWS SigV1 / Aliyun OSS V1
+signing. One-shot form: `HmacSha1.create(&out, msg, key)` with
+`out: [HmacSha1.mac_length]u8`.
 
 ### Build System
 - **[std.Build](references/std-build.md)** - Build system: build.zig, modules, dependencies, build.zig.zon, steps, options, testing, C/C++ integration
