@@ -174,14 +174,12 @@
 //////////////////
 // ARCHITECTURE //
 //////////////////
-#if defined(__x86_64__) || defined(_M_X64)
-  #define SP_AMD64
-  #define SP_AMD
-#endif
-
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC)
   #define SP_ARM64
   #define SP_ARM
+#elif defined(__x86_64__) || defined(_M_X64)
+  #define SP_AMD64
+  #define SP_AMD
 #endif
 
 //////////////
@@ -322,11 +320,11 @@
 // SP_INLINE //
 ///////////////
 #if defined(SP_CPP)
-  #define SP_INLINE inline
+  #define SP_INLINE static inline
 #elif defined(SP_MSVC)
-  #define SP_INLINE __forceinline
+  #define SP_INLINE static __forceinline
 #else
-  #define SP_INLINE inline
+  #define SP_INLINE static inline
 #endif
 
 /////////////////
@@ -461,9 +459,37 @@
 #define SP_UNIQUE_ID() SP_MACRO_CAT(__sp_unique_name__, __LINE__)
 #define sp_unique_id() SP_UNIQUE_ID()
 
+//////////////////////
+// SP_STATIC_ASSERT //
+//////////////////////
+#if defined(SP_CPP) && (__cplusplus >= 201103L)
+  #define sp_static_assert(CONDITION, MESSAGE) static_assert(CONDITION, #MESSAGE)
+#elif !defined(SP_CPP) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+  #define sp_static_assert(CONDITION, MESSAGE) static_assert(CONDITION, #MESSAGE)
+#elif !defined(SP_CPP) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+  #define sp_static_assert(CONDITION, MESSAGE) _Static_assert(CONDITION, #MESSAGE)
+#else
+  #ifdef __COUNTER__
+    #define SP_STATIC_ASSERT_ID __COUNTER__
+  #else
+    #define SP_STATIC_ASSERT_ID __LINE__
+  #endif
+
+  #if SP_HAS_ATTRIBUTE(unused)
+    #define SP_STATIC_ASSERT_UNUSED SP_ATTRIBUTE(unused)
+  #else
+    #define SP_STATIC_ASSERT_UNUSED
+  #endif
+
+  #define sp_static_assert(CONDITION, MESSAGE) \
+    typedef char sp_mcat(sp_mcat(sp_static_assert_, MESSAGE), sp_mcat(_, SP_STATIC_ASSERT_ID)) \
+      [(CONDITION) ? 1 : -1] SP_STATIC_ASSERT_UNUSED
+#endif
+
 #define sp_max(a, b) (((a) > (b)) ? (a) : (b))
 #define sp_min(a, b) (((a) > (b)) ? (b) : (a))
 #define sp_clamp(v, lo, hi) (((v) < (lo)) ? (lo) : ((v) > (hi)) ? (hi) : (v))
+#define sp_uabs(v) ((v) < 0 ? (0ull - (u64)(v)) : (u64)(v))
 #define sp_swap(t, a, b) { t SP_UNIQUE_ID() = (a); (a) = (b); (b) = SP_UNIQUE_ID(); }
 
 #define SP_QSORT_A_FIRST -1
@@ -487,6 +513,7 @@
 #define SP_CARR_LEN(CARR) (sizeof((CARR)) / sizeof((CARR)[0]))
 #define SP_CARR_FOR(CARR, IT) for (u32 IT = 0; IT < SP_CARR_LEN(CARR); IT++)
 #define sp_carr_for(CARR, IT) SP_CARR_FOR(CARR, IT)
+#define sp_carr_for_until(_carr, _it, _expr) for (u32 _it = 0; ((_it < sp_carr_len(_carr) && (_expr))); _it++)
 #define sp_carr_len(CARR) (sizeof((CARR)) / sizeof((CARR)[0]))
 
 #define sp_for(it, n) for (u32 it = 0; it < n; it++)
@@ -616,7 +643,6 @@ SP_BEGIN_EXTERN_C()
   #include <fcntl.h>
   #include <poll.h>
   #include <pthread.h>
-  #include <semaphore.h> // sem_t
   #include <spawn.h>
   #include <string.h>
   #include <stdio.h>
@@ -626,7 +652,6 @@ SP_BEGIN_EXTERN_C()
   #include <sys/ioctl.h>
   #include <sys/time.h> // gettimeofday
 
-  #include <errno.h>  // errno
   #include <signal.h> // signal
   #include <unistd.h> // pipe
 
@@ -634,6 +659,8 @@ SP_BEGIN_EXTERN_C()
   #include <dispatch/dispatch.h>
   #include <mach-o/dyld.h>
   #include <sys/event.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
   #include <poll.h>
   #if defined(SP_FMON_MACOS_USE_FSEVENTS)
     #include <CoreServices/CoreServices.h>
@@ -646,7 +673,6 @@ SP_BEGIN_EXTERN_C()
   #include <errno.h>
   #include <limits.h>
   #include <pthread.h>
-  #include <semaphore.h>
   #include <signal.h>
   #include <spawn.h>
   #include <stdio.h>
@@ -663,7 +689,11 @@ SP_BEGIN_EXTERN_C()
   #include <sys/mman.h>
 
 #elif defined(SP_WIN32)
+  #include <winsock2.h>
   #include <windows.h>
+  #if defined(SP_MSVC)
+    #include <intrin.h>
+  #endif
   #include <assert.h>
   #include <direct.h>
   #include <fcntl.h>
@@ -691,7 +721,6 @@ SP_BEGIN_EXTERN_C()
   #include <errno.h>
   #include <limits.h>
   #include <pthread.h>
-  #include <semaphore.h>
   #include <signal.h>
   #include <spawn.h>
   #include <stdio.h>
@@ -705,6 +734,8 @@ SP_BEGIN_EXTERN_C()
   #include <sys/types.h>
   #include <sys/wait.h>
   #include <sys/mman.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
 #endif
 
 
@@ -754,33 +785,61 @@ typedef enum {
   SP_OK                   = 0,
   SP_ERR                = 1,
   SP_ERR_IO               = 1001,
-  SP_ERR_IO_OPEN_FAILED   = 1002,
-  SP_ERR_IO_SEEK_INVALID  = 1003,
-  SP_ERR_IO_SEEK_FAILED   = 1004,
-  SP_ERR_IO_WRITE_FAILED  = 1005,
-  SP_ERR_IO_CLOSE_FAILED  = 1006,
-  SP_ERR_IO_READ_FAILED   = 1007,
-  SP_ERR_IO_READ_ONLY     = 1008,
-  SP_ERR_IO_NO_SPACE      = 1009,
-  SP_ERR_IO_EOF           = 1010,
-  SP_ERR_IO_INVALID_WRITE = 1011,
-  SP_ERR_IO_UNIMPLEMENTED = 1012,
-  SP_ERR_FMT_TOO_MANY_RENDERERS = 1100,
-  SP_ERR_FMT_WRONG_PARAM_KIND = 1101,
+  SP_ERR_IO_SEEK_INVALID  = 1002,
+  SP_ERR_IO_NO_SPACE      = 1003,
+  SP_ERR_IO_EOF           = 1004,
+  SP_ERR_IO_TIMEOUT       = 1005,
   SP_ERR_FMT_UNKNOWN_DIRECTIVE = 1102,
   SP_ERR_FMT_BAD_DIRECTIVE = 1103,
   SP_ERR_FMT_TOO_MANY_DIRECTIVES = 1104,
   SP_ERR_FMT_BAD_PRECISION = 1105,
   SP_ERR_FMT_BAD_PLACEHOLDER = 1106,
-  SP_ERR_FMT_DIRECTIVE_ARG_MISSING = 1107,
-  SP_ERR_FMT_DIRECTIVE_ARG_UNEXPECTED = 1108,
-  SP_ERR_FMT_DIRECTIVE_ARG_WRONG_KIND = 1109,
   SP_ERR_FMT_UNTERMINATED_PLACEHOLDER = 1111,
-  SP_ERR_FMT_CUSTOM_WITHOUT_FN = 1112,
-  SP_ERR_FMT_WIDTH_ON_OPAQUE_RENDERER = 1113,
+  SP_ERR_FMT_BAD_ARG = 1114,
+  SP_ERR_FMT_WRONG_FILL_KIND = 1115,
+  SP_ERR_FMT_WRONG_WIDTH_KIND = 1116,
+  SP_ERR_FMT_WRONG_PRECISION_KIND = 1117,
+  SP_ERR_FMT_WRONG_STYLE_KIND = 1118,
+  SP_ERR_SYS                = 1200,
+  SP_ERR_SYS_NOT_FOUND      = 1201,
+  SP_ERR_SYS_ACCESS_DENIED  = 1202,
+  SP_ERR_SYS_EXISTS         = 1203,
+  SP_ERR_SYS_IS_DIR         = 1204,
+  SP_ERR_SYS_NOT_DIR        = 1205,
+  SP_ERR_SYS_BAD_FD         = 1206,
+  SP_ERR_SYS_BUSY           = 1207,
+  SP_ERR_SYS_INVALID        = 1208,
+  SP_ERR_SYS_NO_SPACE       = 1209,
+  SP_ERR_SYS_NO_MEMORY      = 1210,
+  SP_ERR_SYS_TOO_MANY_FILES = 1211,
+  SP_ERR_SYS_NAME_TOO_LONG  = 1212,
+  SP_ERR_SYS_READ_ONLY_FS   = 1213,
+  SP_ERR_SYS_WOULD_BLOCK    = 1214,
+  SP_ERR_SYS_BROKEN_PIPE    = 1215,
+  SP_ERR_SYS_UNSUPPORTED    = 1216,
+  SP_ERR_SYS_TIMED_OUT      = 1217,
+  SP_ERR_SYS_CONN_RESET     = 1218,
+  SP_ERR_SYS_CONN_REFUSED   = 1219,
+  SP_ERR_SYS_NOT_CONNECTED  = 1220,
+  SP_ERR_SYS_CROSS_DEVICE   = 1221,
+  SP_ERR_SYS_LOOP           = 1222,
+  SP_ERR_SYS_FILE_TOO_BIG   = 1223,
+  SP_ERR_SYS_INTERRUPTED    = 1224,
+  SP_ERR_SYS_NOT_EMPTY      = 1225,
+  SP_ERR_SYS_BUG            = 1226,
+  SP_ERR_SYS_ADDR_IN_USE    = 1227,
+  SP_ERR_SYS_ADDR_UNAVAILABLE = 1228,
+  SP_ERR_SYS_UNREACHABLE    = 1229,
+  SP_ERR_SYS_IO             = 1230,
+  SP_ERR_SYS_UNSEEKABLE     = 1231,
+  SP_ERR_SYS_TOO_MANY_LINKS = 1232,
+  SP_ERR_SYS_NOT_TTY        = 1233,
   SP_ERR_LAZY,
-  SP_ERR_OS,
 } sp_err_t;
+
+SP_TYPEDEF_FN(sp_str_t, sp_err_str_fn_t, sp_err_t err);
+
+SP_API sp_str_t sp_err_str(sp_err_t err);
 
 typedef enum {
   SP_OPT_NONE = 0,
@@ -819,7 +878,6 @@ typedef struct sp_io_stream_writer sp_io_stream_writer_t;
 typedef HANDLE           sp_win32_handle_t;
 typedef DWORD            sp_win32_dword_t;
 typedef OVERLAPPED       sp_win32_overlapped_t;
-typedef WIN32_FIND_DATAW sp_win32_find_data_t;
 #endif
 
 
@@ -855,13 +913,59 @@ typedef WIN32_FIND_DATAW sp_win32_find_data_t;
 
 #if defined(SP_AMD64)
   #define SP_ARCH_SET_FS 0x1002
-  #define SP_O_DIRECTORY 0200000
-#elif defined(SP_ARM64)
-  #define SP_O_DIRECTORY          040000
 #endif
 
 #if defined(SP_LINUX)
+  #define SP_EOK                  0
+  #define SP_EPERM                1
+  #define SP_ENOENT               2
   #define SP_EINTR                4
+  #define SP_EIO                  5
+  #define SP_EBADF                9
+  #define SP_EAGAIN               11
+  #define SP_ENOMEM               12
+  #define SP_EACCES               13
+  #define SP_EFAULT               14
+  #define SP_EBUSY                16
+  #define SP_EEXIST               17
+  #define SP_EXDEV                18
+  #define SP_ENOTDIR              20
+  #define SP_EISDIR               21
+  #define SP_EINVAL               22
+  #define SP_ENFILE               23
+  #define SP_EMFILE               24
+  #define SP_ENOTTY               25
+  #define SP_ETXTBSY              26
+  #define SP_EFBIG                27
+  #define SP_ENOSPC               28
+  #define SP_ESPIPE               29
+  #define SP_EROFS                30
+  #define SP_EMLINK               31
+  #define SP_EPIPE                32
+  #define SP_ENAMETOOLONG         36
+  #define SP_ENOSYS               38
+  #define SP_ENOTEMPTY            39
+  #define SP_ELOOP                40
+  #define SP_ENONET               64
+  #define SP_EPROTO               71
+  #define SP_ENOPROTOOPT          92
+  #define SP_EPROTONOSUPPORT      93
+  #define SP_EOPNOTSUPP           95
+  #define SP_EAFNOSUPPORT         97
+  #define SP_EADDRINUSE           98
+  #define SP_EADDRNOTAVAIL        99
+  #define SP_ENETDOWN             100
+  #define SP_ENETUNREACH          101
+  #define SP_ECONNABORTED         103
+  #define SP_ECONNRESET           104
+  #define SP_ENOBUFS              105
+  #define SP_ENOTCONN             107
+  #define SP_ETIMEDOUT            110
+  #define SP_ECONNREFUSED         111
+  #define SP_EHOSTDOWN            112
+  #define SP_EHOSTUNREACH         113
+  #define SP_EINPROGRESS          115
+  #define SP_EDQUOT               122
 
   #define SP_AT_FDCWD             (-100)
   #define SP_AT_SYMLINK_NOFOLLOW  0x100
@@ -869,17 +973,6 @@ typedef WIN32_FIND_DATAW sp_win32_find_data_t;
   #define SP_AT_SYMLINK_FOLLOW    0x400
   #define SP_AT_EACCESS           0x200
   #define SP_AT_EMPTY_PATH        0x1000
-
-  #define SP_O_RDONLY             0
-  #define SP_O_WRONLY             1
-  #define SP_O_RDWR               2
-  #define SP_O_CREAT              0100
-  #define SP_O_EXCL               0200
-  #define SP_O_TRUNC              01000
-  #define SP_O_APPEND             02000
-  #define SP_O_NONBLOCK           04000
-  #define SP_O_CLOEXEC            02000000
-  #define SP_O_BINARY             0
 
   #define SP_SEEK_SET             0
   #define SP_SEEK_CUR             1
@@ -952,15 +1045,6 @@ typedef WIN32_FIND_DATAW sp_win32_find_data_t;
   #define SP_TIOCGWINSZ              0x5413
 
 #elif defined(SP_WIN32)
-  #define SP_O_RDONLY             _O_RDONLY
-  #define SP_O_WRONLY             _O_WRONLY
-  #define SP_O_RDWR               _O_RDWR
-  #define SP_O_CREAT              _O_CREAT
-  #define SP_O_EXCL               _O_EXCL
-  #define SP_O_TRUNC              _O_TRUNC
-  #define SP_O_APPEND             _O_APPEND
-  #define SP_O_BINARY             _O_BINARY
-
   #define SP_SEEK_SET             SEEK_SET
   #define SP_SEEK_CUR             SEEK_CUR
   #define SP_SEEK_END             SEEK_END
@@ -970,24 +1054,60 @@ typedef WIN32_FIND_DATAW sp_win32_find_data_t;
   #define SP_CLOCK_MONOTONIC      1
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
+  #define SP_EOK                  0
+  #define SP_EPERM                EPERM
+  #define SP_ENOENT               ENOENT
   #define SP_EINTR                EINTR
+  #define SP_EIO                  EIO
+  #define SP_EBADF                EBADF
+  #define SP_EAGAIN               EAGAIN
+  #define SP_ENOMEM               ENOMEM
+  #define SP_EACCES               EACCES
+  #define SP_EFAULT               EFAULT
+  #define SP_EBUSY                EBUSY
+  #define SP_EEXIST               EEXIST
+  #define SP_EXDEV                EXDEV
+  #define SP_ENOTDIR              ENOTDIR
+  #define SP_EISDIR               EISDIR
+  #define SP_EINVAL               EINVAL
+  #define SP_ENFILE               ENFILE
+  #define SP_EMFILE               EMFILE
+  #define SP_ENOTTY               ENOTTY
+  #define SP_ETXTBSY              ETXTBSY
+  #define SP_EFBIG                EFBIG
+  #define SP_ENOSPC               ENOSPC
+  #define SP_ESPIPE               ESPIPE
+  #define SP_EROFS                EROFS
+  #define SP_EMLINK               EMLINK
+  #define SP_EPIPE                EPIPE
+  #define SP_ENAMETOOLONG         ENAMETOOLONG
+  #define SP_ENOSYS               ENOSYS
+  #define SP_ENOTEMPTY            ENOTEMPTY
+  #define SP_ELOOP                ELOOP
+  #define SP_EPROTONOSUPPORT      EPROTONOSUPPORT
+  #define SP_EOPNOTSUPP           EOPNOTSUPP
+  #define SP_ENOTSUP              ENOTSUP
+  #define SP_EAFNOSUPPORT         EAFNOSUPPORT
+  #define SP_EADDRINUSE           EADDRINUSE
+  #define SP_EADDRNOTAVAIL        EADDRNOTAVAIL
+  #define SP_ENETDOWN             ENETDOWN
+  #define SP_ENETUNREACH          ENETUNREACH
+  #define SP_ECONNABORTED         ECONNABORTED
+  #define SP_ECONNRESET           ECONNRESET
+  #define SP_ENOBUFS              ENOBUFS
+  #define SP_ENOTCONN             ENOTCONN
+  #define SP_ETIMEDOUT            ETIMEDOUT
+  #define SP_ECONNREFUSED         ECONNREFUSED
+  #define SP_ECANCELED            ECANCELED
+  #define SP_EHOSTUNREACH         EHOSTUNREACH
+  #define SP_EINPROGRESS          EINPROGRESS
+  #define SP_EDQUOT               EDQUOT
 
   #define SP_AT_FDCWD             AT_FDCWD
   #define SP_AT_SYMLINK_NOFOLLOW  AT_SYMLINK_NOFOLLOW
   #define SP_AT_REMOVEDIR         AT_REMOVEDIR
   #define SP_AT_SYMLINK_FOLLOW    AT_SYMLINK_FOLLOW
   #define SP_AT_EACCESS           AT_EACCESS
-
-  #define SP_O_RDONLY             O_RDONLY
-  #define SP_O_WRONLY             O_WRONLY
-  #define SP_O_RDWR               O_RDWR
-  #define SP_O_CREAT              O_CREAT
-  #define SP_O_EXCL               O_EXCL
-  #define SP_O_TRUNC              O_TRUNC
-  #define SP_O_APPEND             O_APPEND
-  #define SP_O_NONBLOCK           O_NONBLOCK
-  #define SP_O_CLOEXEC            O_CLOEXEC
-  #define SP_O_BINARY             0
 
   #define SP_SEEK_SET             SEEK_SET
   #define SP_SEEK_CUR             SEEK_CUR
@@ -1186,30 +1306,34 @@ typedef WIN32_FIND_DATAW sp_win32_find_data_t;
 #endif
 
 #if defined(SP_WIN32)
-  typedef struct {
-    DWORD input_mode;
-    DWORD output_mode;
-  } sp_tty_mode_t;
-#elif defined(SP_LINUX)
-  typedef struct {
-    u32 c_iflag;
-    u32 c_oflag;
-    u32 c_cflag;
-    u32 c_lflag;
-    u8  c_cc[20];
-    u32 _c_ispeed;
-    u32 _c_ospeed;
-  } sp_sys_termios_t;
-
-  typedef sp_sys_termios_t sp_tty_mode_t;
-#elif defined(SP_MACOS) || defined(SP_COSMO)
-  typedef struct termios sp_tty_mode_t;
-#elif defined(SP_WASM)
-  typedef struct {
-    u32 dummy;
-  } sp_tty_mode_t;
-
+  typedef intptr_t sp_sys_socket_t;
+#else
+  typedef s32 sp_sys_socket_t;
 #endif
+#define SP_SYS_INVALID_SOCKET ((sp_sys_socket_t)-1)
+
+typedef struct {
+  u8  octets [4];
+  u16 port;
+} sp_sys_ipv4_t;
+
+#define SP_SYS_TTY_ATTR_SIZE 128
+
+typedef struct {
+  SP_ALIGNED u8 opaque [SP_SYS_TTY_ATTR_SIZE];
+  bool present;
+} sp_sys_tty_attr_t;
+
+typedef struct {
+  sp_sys_tty_attr_t in;
+  sp_sys_tty_attr_t out;
+} sp_sys_tty_state_t;
+
+typedef enum {
+  SP_SYS_TTY_MODE_COOKED,
+  SP_SYS_TTY_MODE_RAW,
+  SP_SYS_TTY_MODE_NO_ECHO,
+} sp_sys_tty_mode_t;
 
 typedef struct {
   s64 tv_sec;
@@ -1224,59 +1348,129 @@ typedef enum {
 } sp_fs_kind_t;
 
 typedef struct {
-  sp_fs_kind_t      kind;
-  s64               size;
+  sp_fs_kind_t kind;
+  s64 size;
   sp_sys_timespec_t atime;
   sp_sys_timespec_t mtime;
   sp_sys_timespec_t btime;
-  u64               id;
-  u64               device;
-  u64               nlink;
-  u32               raw_attrs;
+  u64 id;
+  u64 device;
+  u64 nlink;
+  u32 raw_attrs;
 } sp_sys_file_meta_t;
 
 typedef struct {
-  s64             handle;
-  sp_mem_buffer_t buf;
-  u64             cursor;
-} sp_sys_fs_it_t;
+  s64 handle;
+  u64 cookie;
+} sp_sys_dir_t;
 
 typedef struct {
-  const c8*    name;
-  u32          len;
+  const c8* name;
+  u32 len;
   sp_fs_kind_t kind;
-} sp_sys_fs_entry_t;
+} sp_sys_dir_entry_t;
+
+#define SP_SYS_DIR_MIN_BUF 2048
+
+typedef enum {
+  SP_SYS_OPEN_MODE_RO,
+  SP_SYS_OPEN_MODE_WO,
+  SP_SYS_OPEN_MODE_RW,
+} sp_sys_open_mode_t;
+
+typedef enum {
+  SP_SYS_OPEN_CREATE    = 1 << 0,
+  SP_SYS_OPEN_EXCLUSIVE = 1 << 1,
+  SP_SYS_OPEN_TRUNCATE  = 1 << 2,
+  SP_SYS_OPEN_APPEND    = 1 << 3,
+} sp_sys_open_flags_t;
+
+typedef enum {
+  SP_SYS_BLOCKING,
+  SP_SYS_NONBLOCKING,
+} sp_sys_io_mode_t;
+
+typedef enum {
+  SP_SYS_NOT_INHERITED,
+  SP_SYS_INHERITED,
+} sp_sys_inherited_t;
+
+typedef struct {
+  sp_sys_io_mode_t mode;
+  sp_sys_inherited_t inherited;
+} sp_sys_handle_desc_t;
+
+typedef struct {
+  sp_sys_inherited_t r;
+  sp_sys_inherited_t w;
+} sp_sys_pipe_desc_t;
+
+typedef struct {
+  sp_sys_fd_t r;
+  sp_sys_fd_t w;
+} sp_sys_pipe_t;
+
+typedef struct {
+  sp_sys_fd_t fd;
+} sp_sys_event_t;
 
 SP_TYPEDEF_FN(int, sp_qsort_fn_t, const void *, const void *);
-SP_API void        sp_sys_init();
-SP_API s64         sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count);
-SP_API s64         sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count);
-SP_API s64         sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset);
-SP_API s64         sp_sys_pwrite(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset);
+SP_API sp_err_t    sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count, u64* bytes_read);
+SP_API sp_err_t    sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count, u64* bytes_written);
+SP_API sp_err_t    sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset, u64* bytes_read);
+SP_API sp_err_t    sp_sys_pwrite(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset, u64* bytes_written);
+SP_API sp_err_t    sp_sys_transfer(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64* bytes_moved);
+SP_API sp_err_t    sp_sys_transfer_positional(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64 offset, u64* bytes_moved);
 SP_API sp_sys_fd_t sp_sys_get_root(s32 it);
 SP_API s64         sp_sys_get_exe_path(c8* buf, u64 size);
 SP_API s64         sp_sys_get_cwd_path(c8* buf, u64 size);
 SP_API s64         sp_sys_get_storage_path(c8* buf, u64 size);
 SP_API s64         sp_sys_get_config_path(c8* buf, u64 size);
-SP_API sp_sys_fd_t sp_sys_open(sp_sys_fd_t fd, const c8* path, u32 len, s32 flags, s32 mode);
-SP_API s32         sp_sys_close(sp_sys_fd_t fd);
-SP_API s32         sp_sys_pipe(sp_sys_fd_t* read_end, sp_sys_fd_t* write_end);
-SP_API s32         sp_sys_mkdir(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode);
-SP_API s32         sp_sys_rmdir(sp_sys_fd_t fd, const c8* path, u32 len);
-SP_API s32         sp_sys_unlink(sp_sys_fd_t fd, const c8* path, u32 len);
-SP_API s32         sp_sys_rename(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* to, u32 to_len);
-SP_API s32         sp_sys_link(sp_sys_fd_t from_fd, const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
-SP_API s32         sp_sys_symlink(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
-SP_API s32         sp_sys_get_path_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_get_link_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_chmod(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts);
-SP_API s32         sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem);
+SP_API sp_err_t    sp_sys_open(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_open_dir(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_close(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_pipe(sp_sys_pipe_t* pipe, sp_sys_pipe_desc_t desc);
+SP_API sp_err_t    sp_sys_pipe_ready(sp_sys_fd_t fd, u8* ready);
+SP_API sp_err_t    sp_sys_mkdir(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode);
+SP_API sp_err_t    sp_sys_rmdir(sp_sys_fd_t fd, const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_unlink(sp_sys_fd_t fd, const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_rename(sp_sys_fd_t from, const c8* pfrom, u32 lf, sp_sys_fd_t to, const c8* pto, u32 lt);
+SP_API sp_err_t    sp_sys_link(sp_sys_fd_t from, const c8* pfrom, u32 lf, sp_sys_fd_t to, const c8* pto, u32 lt);
+SP_API sp_err_t    sp_sys_symlink(const c8* from, u32 lf, sp_sys_fd_t to, const c8* pto, u32 lt);
+SP_API sp_err_t    sp_sys_get_path_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_link_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_chmod(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts);
+SP_API sp_err_t    sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem);
+SP_API bool        sp_sys_futex_wait(u32* addr, u32 expected, const sp_sys_timespec_t* timeout);
+SP_API void        sp_sys_futex_wake(u32* addr);
+SP_API void        sp_sys_futex_wake_all(u32* addr);
 SP_API s64         sp_sys_canonicalize_path(const c8* path, u32 len, c8* buf, u64 size);
-SP_API s32         sp_sys_fd_ready(sp_sys_fd_t fd, u8* ready);
-SP_API s32         sp_sys_fd_wait(sp_sys_fd_t fd);
-SP_API s32         sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds);
+SP_API sp_err_t    sp_sys_event_open(sp_sys_event_t* out);
+SP_API sp_err_t    sp_sys_event_signal(sp_sys_event_t event);
+SP_API sp_err_t    sp_sys_event_clear(sp_sys_event_t event);
+SP_API sp_err_t    sp_sys_wait(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled);
+SP_API sp_err_t    sp_sys_tty_get(sp_sys_fd_t fd, sp_sys_tty_attr_t* attr);
+SP_API sp_err_t    sp_sys_tty_set(sp_sys_fd_t fd, const sp_sys_tty_attr_t* attr);
+SP_API sp_err_t    sp_sys_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows);
+SP_API bool        sp_sys_is_tty(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_tty_ready(sp_sys_fd_t fd, u8* ready);
+SP_API sp_err_t    sp_sys_tty_mode_apply(sp_sys_tty_attr_t* in, sp_sys_tty_attr_t* out, sp_sys_tty_mode_t mode);
+SP_API sp_err_t    sp_sys_tty_use_vt(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_socket_open(sp_sys_socket_t* out, sp_sys_handle_desc_t desc);
+SP_API sp_err_t    sp_sys_socket_bind(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+SP_API sp_err_t    sp_sys_socket_listen(sp_sys_socket_t socket, u32 backlog);
+SP_API sp_err_t    sp_sys_socket_connect(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+SP_API sp_err_t    sp_sys_socket_error(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_accept(sp_sys_socket_t listener, sp_sys_handle_desc_t desc, sp_sys_socket_t* out);
+SP_API sp_err_t    sp_sys_socket_close(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_recv(sp_sys_socket_t socket, void* buf, u64 count, u64* bytes_read);
+SP_API sp_err_t    sp_sys_socket_send(sp_sys_socket_t socket, const void* buf, u64 count, u64* bytes_written);
+SP_API sp_err_t    sp_sys_socket_wait(sp_sys_socket_t socket, bool readable, u32 timeout_ms);
+SP_API sp_err_t    sp_sys_socket_set_nonblocking(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_reuse_addr(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_local_port(sp_sys_socket_t socket, u16* out);
 SP_API void*       sp_sys_alloc(u64 size);
 SP_API void        sp_sys_free(void* ptr, u64 size);
 SP_API void*       sp_sys_memcpy(void* dest, const void* src, u64 n);
@@ -1288,25 +1482,179 @@ SP_API void        sp_sys_exit(s32 code);
 SP_API void        sp_sys_env(const c8** env, u32* len);
 
 SP_API s64         sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence);
-SP_API s32         sp_sys_chdir(const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_chdir(const c8* path, u32 len);
 
 
-SP_API sp_sys_fd_t sp_sys_open_s(sp_sys_fd_t fd, sp_str_t path, s32 flags, s32 mode);
-SP_API s32         sp_sys_get_path_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_get_link_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_mkdir_s(sp_sys_fd_t fd, sp_str_t path, s32 mode);
-SP_API s32         sp_sys_rmdir_s(sp_sys_fd_t fd, sp_str_t path);
-SP_API s32         sp_sys_unlink_s(sp_sys_fd_t fd, sp_str_t path);
-SP_API s32         sp_sys_rename_s(sp_sys_fd_t from_fd, sp_str_t from, sp_sys_fd_t to_fd, sp_str_t to);
-SP_API s32         sp_sys_chdir_s(sp_str_t path);
-SP_API s32         sp_sys_link_s(sp_sys_fd_t from_fd, sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias);
-SP_API s32         sp_sys_symlink_s(sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias);
-SP_API s32         sp_sys_chmod_s(sp_sys_fd_t fd, sp_str_t path, const sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_open_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_open_dir_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_get_path_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_link_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_mkdir_s(sp_sys_fd_t fd, sp_str_t path, s32 mode);
+SP_API sp_err_t    sp_sys_rmdir_s(sp_sys_fd_t fd, sp_str_t path);
+SP_API sp_err_t    sp_sys_unlink_s(sp_sys_fd_t fd, sp_str_t path);
+SP_API sp_err_t    sp_sys_rename_s(sp_sys_fd_t from_fd, sp_str_t from, sp_sys_fd_t to_fd, sp_str_t to);
+SP_API sp_err_t    sp_sys_chdir_s(sp_str_t path);
+SP_API sp_err_t    sp_sys_link_s(sp_sys_fd_t from_fd, sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias);
+SP_API sp_err_t    sp_sys_symlink_s(sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias);
+SP_API sp_err_t    sp_sys_chmod_s(sp_sys_fd_t fd, sp_str_t path, const sp_sys_file_meta_t* st);
 SP_API s64         sp_sys_canonicalize_path_s(sp_str_t path, c8* buf, u64 size);
-SP_API s32         sp_sys_fs_it_open(sp_sys_fd_t fd, sp_sys_fs_it_t* it, const c8* path, u32 path_len, void* buf, u64 cap);
-SP_API s32         sp_sys_fs_it_open_s(sp_sys_fd_t fd, sp_sys_fs_it_t* it, sp_str_t path, sp_mem_slice_t buf);
-SP_API s32         sp_sys_fs_it_next(sp_sys_fs_it_t* it, sp_sys_fs_entry_t* out);
-SP_API void        sp_sys_fs_it_close(sp_sys_fs_it_t* it);
+SP_API sp_err_t    sp_sys_dir_from_fd(sp_sys_fd_t fd, sp_sys_dir_t* out);
+SP_API sp_err_t    sp_sys_dir_read(sp_sys_dir_t* dir, sp_mem_buffer_t* buf);
+SP_API sp_err_t    sp_sys_dir_parse(sp_sys_dir_t* dir, sp_mem_buffer_t* buf, u64* cursor, sp_sys_dir_entry_t* out);
+SP_API sp_err_t    sp_sys_dir_close(sp_sys_dir_t* dir);
+
+SP_API sp_err_t    sp_tty_set_mode(sp_sys_fd_t in, sp_sys_fd_t out, sp_sys_tty_mode_t mode, sp_sys_tty_state_t* saved);
+SP_API sp_err_t    sp_tty_restore(sp_sys_fd_t in, sp_sys_fd_t out, const sp_sys_tty_state_t* saved);
+
+typedef struct {
+  void        (*init)(void);
+  sp_err_t    (*read)(sp_sys_fd_t fd, void* buf, u64 count, u64* bytes_read);
+  sp_err_t    (*write)(sp_sys_fd_t fd, const void* buf, u64 count, u64* bytes_written);
+  sp_err_t    (*pread)(sp_sys_fd_t fd, void* buf, u64 count, u64 offset, u64* bytes_read);
+  sp_err_t    (*pwrite)(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset, u64* bytes_written);
+  sp_err_t    (*transfer)(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64* bytes_moved);
+  sp_err_t    (*transfer_positional)(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64 offset, u64* bytes_moved);
+  sp_sys_fd_t (*get_root)(s32 it);
+  s64         (*get_exe_path)(c8* buf, u64 size);
+  s64         (*get_cwd_path)(c8* buf, u64 size);
+  s64         (*get_storage_path)(c8* buf, u64 size);
+  s64         (*get_config_path)(c8* buf, u64 size);
+  sp_err_t    (*open)(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out);
+  sp_err_t    (*open_dir)(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_fd_t*);
+  sp_err_t    (*close)(sp_sys_fd_t fd);
+  sp_err_t    (*pipe)(sp_sys_pipe_t* pipe, sp_sys_pipe_desc_t desc);
+  sp_err_t    (*pipe_ready)(sp_sys_fd_t fd, u8* ready);
+  sp_err_t    (*mkdir)(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode);
+  sp_err_t    (*rmdir)(sp_sys_fd_t fd, const c8* path, u32 len);
+  sp_err_t    (*unlink)(sp_sys_fd_t fd, const c8* path, u32 len);
+  sp_err_t    (*rename)(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* to, u32 to_len);
+  sp_err_t    (*link)(sp_sys_fd_t from_fd, const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
+  sp_err_t    (*symlink)(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
+  sp_err_t    (*get_path_metadata)(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+  sp_err_t    (*get_link_metadata)(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+  sp_err_t    (*get_file_metadata)(sp_sys_fd_t fd, sp_sys_file_meta_t* st);
+  sp_err_t    (*chmod)(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st);
+  sp_err_t    (*clock_gettime)(s32 clockid, sp_sys_timespec_t* ts);
+  sp_err_t    (*nanosleep)(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem);
+  bool        (*futex_wait)(u32* addr, u32 expected, const sp_sys_timespec_t* timeout);
+  void        (*futex_wake)(u32* addr);
+  void        (*futex_wake_all)(u32* addr);
+  s64         (*canonicalize_path)(const c8* path, u32 len, c8* buf, u64 size);
+  sp_err_t    (*event_open)(sp_sys_event_t* out);
+  sp_err_t    (*event_signal)(sp_sys_event_t event);
+  sp_err_t    (*event_clear)(sp_sys_event_t event);
+  sp_err_t    (*wait)(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled);
+  sp_err_t    (*tty_get)(sp_sys_fd_t fd, sp_sys_tty_attr_t* attr);
+  sp_err_t    (*tty_set)(sp_sys_fd_t fd, const sp_sys_tty_attr_t* attr);
+  sp_err_t    (*tty_size)(sp_sys_fd_t fd, u32* cols, u32* rows);
+  bool        (*is_tty)(sp_sys_fd_t fd);
+  sp_err_t    (*tty_ready)(sp_sys_fd_t fd, u8* ready);
+  sp_err_t    (*tty_mode_apply)(sp_sys_tty_attr_t* in, sp_sys_tty_attr_t* out, sp_sys_tty_mode_t mode);
+  sp_err_t    (*tty_use_vt)(sp_sys_fd_t fd);
+  sp_err_t    (*socket_open)(sp_sys_socket_t* out, sp_sys_handle_desc_t desc);
+  sp_err_t    (*socket_bind)(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+  sp_err_t    (*socket_listen)(sp_sys_socket_t socket, u32 backlog);
+  sp_err_t    (*socket_connect)(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+  sp_err_t    (*socket_error)(sp_sys_socket_t socket);
+  sp_err_t    (*socket_accept)(sp_sys_socket_t listener, sp_sys_handle_desc_t desc, sp_sys_socket_t* out);
+  sp_err_t    (*socket_close)(sp_sys_socket_t socket);
+  sp_err_t    (*socket_recv)(sp_sys_socket_t socket, void* buf, u64 count, u64* bytes_read);
+  sp_err_t    (*socket_send)(sp_sys_socket_t socket, const void* buf, u64 count, u64* bytes_written);
+  sp_err_t    (*socket_wait)(sp_sys_socket_t socket, bool readable, u32 timeout_ms);
+  sp_err_t    (*socket_set_nonblocking)(sp_sys_socket_t socket);
+  sp_err_t    (*socket_reuse_addr)(sp_sys_socket_t socket);
+  sp_err_t    (*socket_local_port)(sp_sys_socket_t socket, u16* out);
+  void*       (*alloc)(u64 size);
+  void        (*free)(void* ptr, u64 size);
+  void*       (*memcpy)(void* dest, const void* src, u64 n);
+  void*       (*memmove)(void* dest, const void* src, u64 n);
+  void*       (*memset)(void* dest, u8 fill, u64 n);
+  s32         (*memcmp)(const void* a, const void* b, u64 n);
+  void        (*assert)(bool cond);
+  void        (*exit)(s32 code);
+  void        (*env)(const c8** env, u32* len);
+  s64         (*lseek)(sp_sys_fd_t fd, s64 offset, s32 whence);
+  sp_err_t    (*chdir)(const c8* path, u32 len);
+  sp_err_t    (*dir_from_fd)(sp_sys_fd_t fd, sp_sys_dir_t* out);
+  sp_err_t    (*dir_read)(sp_sys_dir_t* dir, sp_mem_buffer_t* buf);
+  sp_err_t    (*dir_parse)(sp_sys_dir_t* dir, sp_mem_buffer_t* buf, u64* cursor, sp_sys_dir_entry_t* out);
+  sp_err_t    (*dir_close)(sp_sys_dir_t* dir);
+} sp_sys_vtable_t;
+
+SP_API sp_err_t    sp_sys_read_p(sp_sys_fd_t fd, void* buf, u64 count, u64* bytes_read);
+SP_API sp_err_t    sp_sys_write_p(sp_sys_fd_t fd, const void* buf, u64 count, u64* bytes_written);
+SP_API sp_err_t    sp_sys_pread_p(sp_sys_fd_t fd, void* buf, u64 count, u64 offset, u64* bytes_read);
+SP_API sp_err_t    sp_sys_pwrite_p(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset, u64* bytes_written);
+SP_API sp_err_t    sp_sys_transfer_p(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64* bytes_moved);
+SP_API sp_err_t    sp_sys_transfer_positional_p(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64 offset, u64* bytes_moved);
+SP_API sp_sys_fd_t sp_sys_get_root_p(s32 it);
+SP_API s64         sp_sys_get_exe_path_p(c8* buf, u64 size);
+SP_API s64         sp_sys_get_cwd_path_p(c8* buf, u64 size);
+SP_API s64         sp_sys_get_storage_path_p(c8* buf, u64 size);
+SP_API s64         sp_sys_get_config_path_p(c8* buf, u64 size);
+SP_API sp_err_t    sp_sys_open_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_open_dir_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_close_p(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_pipe_p(sp_sys_pipe_t* pipe, sp_sys_pipe_desc_t desc);
+SP_API sp_err_t    sp_sys_pipe_ready_p(sp_sys_fd_t fd, u8* ready);
+SP_API sp_err_t    sp_sys_mkdir_p(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode);
+SP_API sp_err_t    sp_sys_rmdir_p(sp_sys_fd_t fd, const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_unlink_p(sp_sys_fd_t fd, const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_rename_p(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* to, u32 to_len);
+SP_API sp_err_t    sp_sys_link_p(sp_sys_fd_t from_fd, const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
+SP_API sp_err_t    sp_sys_symlink_p(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
+SP_API sp_err_t    sp_sys_get_path_metadata_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_link_metadata_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_file_metadata_p(sp_sys_fd_t fd, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_chmod_p(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_clock_gettime_p(s32 clockid, sp_sys_timespec_t* ts);
+SP_API sp_err_t    sp_sys_nanosleep_p(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem);
+SP_API bool        sp_sys_futex_wait_p(u32* addr, u32 expected, const sp_sys_timespec_t* timeout);
+SP_API void        sp_sys_futex_wake_p(u32* addr);
+SP_API void        sp_sys_futex_wake_all_p(u32* addr);
+SP_API s64         sp_sys_canonicalize_path_p(const c8* path, u32 len, c8* buf, u64 size);
+SP_API sp_err_t    sp_sys_event_open_p(sp_sys_event_t* out);
+SP_API sp_err_t    sp_sys_event_signal_p(sp_sys_event_t event);
+SP_API sp_err_t    sp_sys_event_clear_p(sp_sys_event_t event);
+SP_API sp_err_t    sp_sys_wait_p(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled);
+SP_API sp_err_t    sp_sys_tty_get_p(sp_sys_fd_t fd, sp_sys_tty_attr_t* attr);
+SP_API sp_err_t    sp_sys_tty_set_p(sp_sys_fd_t fd, const sp_sys_tty_attr_t* attr);
+SP_API sp_err_t    sp_sys_tty_size_p(sp_sys_fd_t fd, u32* cols, u32* rows);
+SP_API bool        sp_sys_is_tty_p(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_tty_ready_p(sp_sys_fd_t fd, u8* ready);
+SP_API sp_err_t    sp_sys_tty_mode_apply_p(sp_sys_tty_attr_t* in, sp_sys_tty_attr_t* out, sp_sys_tty_mode_t mode);
+SP_API sp_err_t    sp_sys_tty_use_vt_p(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_socket_open_p(sp_sys_socket_t* out, sp_sys_handle_desc_t desc);
+SP_API sp_err_t    sp_sys_socket_bind_p(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+SP_API sp_err_t    sp_sys_socket_listen_p(sp_sys_socket_t socket, u32 backlog);
+SP_API sp_err_t    sp_sys_socket_connect_p(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+SP_API sp_err_t    sp_sys_socket_error_p(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_accept_p(sp_sys_socket_t listener, sp_sys_handle_desc_t desc, sp_sys_socket_t* out);
+SP_API sp_err_t    sp_sys_socket_close_p(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_recv_p(sp_sys_socket_t socket, void* buf, u64 count, u64* bytes_read);
+SP_API sp_err_t    sp_sys_socket_send_p(sp_sys_socket_t socket, const void* buf, u64 count, u64* bytes_written);
+SP_API sp_err_t    sp_sys_socket_wait_p(sp_sys_socket_t socket, bool readable, u32 timeout_ms);
+SP_API sp_err_t    sp_sys_socket_set_nonblocking_p(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_reuse_addr_p(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_local_port_p(sp_sys_socket_t socket, u16* out);
+SP_API void*       sp_sys_alloc_p(u64 size);
+SP_API void        sp_sys_free_p(void* ptr, u64 size);
+SP_API void*       sp_sys_memcpy_p(void* dest, const void* src, u64 n);
+SP_API void*       sp_sys_memmove_p(void* dest, const void* src, u64 n);
+SP_API void*       sp_sys_memset_p(void* dest, u8 fill, u64 n);
+SP_API s32         sp_sys_memcmp_p(const void* a, const void* b, u64 n);
+SP_API void        sp_sys_assert_p(bool cond);
+SP_API void        sp_sys_exit_p(s32 code);
+SP_API void        sp_sys_env_p(const c8** env, u32* len);
+SP_API s64         sp_sys_lseek_p(sp_sys_fd_t fd, s64 offset, s32 whence);
+SP_API sp_err_t    sp_sys_chdir_p(const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_dir_from_fd_p(sp_sys_fd_t fd, sp_sys_dir_t* out);
+SP_API sp_err_t    sp_sys_dir_read_p(sp_sys_dir_t* dir, sp_mem_buffer_t* buf);
+SP_API sp_err_t    sp_sys_dir_parse_p(sp_sys_dir_t* dir, sp_mem_buffer_t* buf, u64* cursor, sp_sys_dir_entry_t* out);
+SP_API sp_err_t    sp_sys_dir_close_p(sp_sys_dir_t* dir);
+
+SP_API const sp_sys_vtable_t  sp_sys_vtable_platform;
+SP_API const sp_sys_vtable_t* sp_sys_set_vtable(const sp_sys_vtable_t* vt);
 
 //  ██████   ██████   █████████   █████ ██████   █████
 // ░░██████ ██████   ███░░░░░███ ░░███ ░░██████ ░░███
@@ -1424,7 +1772,6 @@ typedef s32 (*sp_entry_fn_t)(s32, const c8**);
 
 #if defined(SP_FREESTANDING)
   extern c8** environ;
-  extern s32 errno;
 #elif defined(SP_WASM)
   extern c8** environ;
 #endif
@@ -1447,6 +1794,8 @@ typedef enum {
   SP_ALLOCATOR_MODE_ALLOC,
   SP_ALLOCATOR_MODE_FREE,
   SP_ALLOCATOR_MODE_RESIZE,
+  SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED,
+  SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED,
 } sp_mem_alloc_mode_t;
 
 SP_TYPEDEF_FN(
@@ -1461,10 +1810,14 @@ typedef struct sp_allocator_t {
 } sp_mem_t;
 
 SP_API void*    sp_mem_allocator_alloc(sp_mem_t arena, u64 size);
+SP_API void*    sp_mem_allocator_alloc_uninitialized(sp_mem_t arena, u64 size);
 SP_API void*    sp_mem_allocator_realloc(sp_mem_t arena, void* ptr, u64 old_size, u64 size);
+SP_API void*    sp_mem_allocator_realloc_uninitialized(sp_mem_t arena, void* ptr, u64 old_size, u64 size);
 SP_API void     sp_mem_allocator_free(sp_mem_t arena, void* buffer, u64 size);
 SP_API void*    sp_alloc(sp_mem_t mem, u64 size);
+SP_API void*    sp_alloc_uninitialized(sp_mem_t mem, u64 size);
 SP_API void*    sp_realloc(sp_mem_t mem, void* memory, u64 old_size, u64 size);
+SP_API void*    sp_realloc_uninitialized(sp_mem_t mem, void* memory, u64 old_size, u64 size);
 SP_API void     sp_free(sp_mem_t mem, void* memory, u64 size);
 SP_API sp_mem_t sp_mem_get_scratch();
 
@@ -1485,6 +1838,8 @@ SP_API void sp_mem_zero(void* buffer, u64 buffer_size);
 #define sp_mem_arena_alloc_type(a, T) sp_mem_arena_alloc_n(a, T, 1)
 #define sp_alloc_n(a, T, n) (T*)sp_alloc(a, (n) * sizeof(T))
 #define sp_alloc_type(a, T) sp_alloc_n(a, T, 1)
+#define sp_alloc_uninitialized_n(a, T, n) (T*)sp_alloc_uninitialized(a, (n) * sizeof(T))
+#define sp_alloc_uninitialized_type(a, T) sp_alloc_uninitialized_n(a, T, 1)
 
 /////////////////////
 // FIXED ALLOCATOR //
@@ -1502,6 +1857,12 @@ SP_API sp_mem_t       sp_mem_fixed_as_allocator(sp_mem_fixed_t* fixed);
 SP_API void           sp_mem_fixed_clear(sp_mem_fixed_t* fixed);
 SP_API u64            sp_mem_fixed_bytes_used(sp_mem_fixed_t* fixed);
 SP_API void*          sp_mem_fixed_on_alloc(void* ud, sp_mem_alloc_mode_t mode, u64 size, void* old, u64 old_size);
+
+/////////////////////
+// ERROR ALLOCATOR //
+/////////////////////
+SP_API sp_mem_t sp_mem_error();
+SP_API void*    sp_mem_error_on_alloc(void* ud, sp_mem_alloc_mode_t mode, u64 size, void* old, u64 old_size);
 
 ////////////////////
 // PAGE ALLOCATOR //
@@ -1549,7 +1910,9 @@ SP_API void                  sp_mem_arena_pop(sp_mem_arena_marker_t marker);
 SP_API u64                   sp_mem_arena_capacity(sp_mem_arena_t* arena);
 SP_API u64                   sp_mem_arena_bytes_used(sp_mem_arena_t* arena);
 SP_API void*                 sp_mem_arena_alloc(sp_mem_arena_t* arena, u64 size);
+SP_API void*                 sp_mem_arena_alloc_uninitialized(sp_mem_arena_t* arena, u64 size);
 SP_API void*                 sp_mem_arena_realloc(sp_mem_arena_t* arena, void* ptr, u64 old_size, u64 size);
+SP_API void*                 sp_mem_arena_realloc_uninitialized(sp_mem_arena_t* arena, void* ptr, u64 old_size, u64 size);
 SP_API void                  sp_mem_arena_free(sp_mem_arena_t* arena, void* ptr, u64 size);
 SP_API sp_mem_arena_t*       sp_mem_get_scratch_arena();
 SP_API sp_mem_arena_t*       sp_mem_get_scratch_arena_for(sp_mem_t mem);
@@ -1667,7 +2030,9 @@ SP_API void                 sp_mem_heap_destroy(sp_mem_heap_t* heap);
 SP_API sp_mem_t             sp_mem_heap_as_allocator(sp_mem_heap_t* heap);
 SP_API void*                sp_mem_heap_on_alloc(void* ud, sp_mem_alloc_mode_t mode, u64 size, void* ptr, u64 old_size);
 SP_API void*                sp_mem_heap_alloc(sp_mem_heap_t* heap, u64 size);
+SP_API void*                sp_mem_heap_alloc_uninitialized(sp_mem_heap_t* heap, u64 size);
 SP_API void*                sp_mem_heap_realloc(sp_mem_heap_t* heap, void* ptr, u64 size);
+SP_API void*                sp_mem_heap_realloc_uninitialized(sp_mem_heap_t* heap, void* ptr, u64 size);
 SP_API void                 sp_mem_heap_free(sp_mem_heap_t* heap, void* ptr);
 SP_API sp_mem_heap_span_t*  sp_mem_heap_find_span(sp_mem_heap_t* heap, void* ptr);
 
@@ -1729,12 +2094,22 @@ typedef struct SP_ALIGNED {
   sp_mem_t allocator;
 } sp_da_header_t;
 
-#define sp_da_a(T) sp_mcat(stop_wasting_my_time___, T)
 #define sp_da(T) T*
-SP_API void* sp_da_init_ex(sp_mem_t mem, u32 stride);
-SP_API void* sp_da_resize(void* arr, u32 stride, u64 len);
-SP_API void* sp_da_grow_ex(void* arr, u32 stride, u64 addlen);
-SP_API void  sp_da_push_ex(void** arr, void* val, u32 stride);
+#define sp_arr(T, N) struct { sp_da_header_t header; T items [N]; }
+
+#define sp_da_init(__mem, __arr) \
+  *sp_da_vp(__arr) = sp_da_init_ex((__mem), sp_da_stride(__arr))
+
+#define sp_da_new(__a, __T) \
+  ((__T*)sp_da_init_ex((__a), sizeof(__T)))
+
+#define sp_arr_init(__S)\
+  (sp_assert((u8*)(__S)->items - (u8*)(__S) == sizeof(sp_da_header_t)),\
+   (__S)->header = (sp_da_header_t) {\
+     .capacity = sp_carr_len((__S)->items),\
+     .allocator = sp_mem_error(),\
+   },\
+   (__S)->items)
 
 #define sp_da_for(__ARR, __IT)  for (u64 __IT = 0; __IT < sp_da_size((__ARR)); __IT++)
 #define sp_da_rfor(__ARR, __IT) for (u64 __IT = sp_da_size(__ARR); __IT-- > 0; )
@@ -1765,12 +2140,6 @@ SP_API void  sp_da_push_ex(void** arr, void* val, u32 stride);
 
 #define sp_da_vp(__arr) \
   ((void**)&(__arr))
-
-#define sp_da_init(__mem, __arr) \
-  *sp_da_vp(__arr) = sp_da_init_ex((__mem), sp_da_stride(__arr))
-
-#define sp_da_new(__a, __T) \
-  ((__T*)sp_da_init_ex((__a), sizeof(__T)))
 
 #define sp_da_free(__arr)         \
   sp_mem_allocator_free(sp_da_mem(__arr), sp_da_head(__arr), sp_da_capacity(__arr) * sp_da_stride(__arr) + sizeof(sp_da_header_t))
@@ -1803,6 +2172,11 @@ SP_API void  sp_da_push_ex(void** arr, void* val, u32 stride);
 
 #define sp_da_sort(arr, fn) sp_os_qsort(arr, sp_da_size(arr), sizeof((arr)[0]), fn)
 #define sp_da_bounds_ok(arr, it) ((it) < sp_da_size(arr))
+
+SP_API void* sp_da_init_ex(sp_mem_t mem, u32 stride);
+SP_API void* sp_da_resize(void* arr, u32 stride, u64 len);
+SP_API void* sp_da_grow_ex(void* arr, u32 stride, u64 addlen);
+SP_API void  sp_da_push_ex(void** arr, void* val, u32 stride);
 
 
 //  ███████████   █████ ██████   █████   █████████     ███████████  █████  █████ ███████████ ███████████ ██████████ ███████████
@@ -2323,25 +2697,6 @@ SP_API bool        sp_ht_on_compare_cstr_key(void* ka, void* kb, u64 size);
 
  */
 typedef struct {
-  void* user_data;
-
-  sp_io_writer_t* writer;
-  struct {
-    sp_str_t* data;
-    u32 len;
-  } elements;
-
-  sp_str_t str;
-  u32 index;
-} sp_str_reduce_context_t;
-
-typedef struct {
-  sp_mem_t mem;
-  sp_str_t str;
-  void* user_data;
-} sp_str_map_context_t;
-
-typedef struct {
   sp_str_t first;
   sp_str_t second;
 } sp_str_pair_t;
@@ -2368,9 +2723,6 @@ typedef struct {
   u8 codepoint_len;
 } sp_utf8_it_t;
 
-SP_TYPEDEF_FN(sp_str_t, sp_str_map_fn_t, sp_str_map_context_t* context);
-SP_TYPEDEF_FN(void, sp_str_reduce_fn_t, sp_str_reduce_context_t* context);
-
 #define sp_str_lit(STR)  (SP_RVAL(sp_str_t) { .data = (const c8*)(STR), .len = (u32)(sizeof(STR) - 1) })
 #define sp_str_for(str, it) for (u32 it = 0; it < str.len; it++)
 #define sp_str_for_it(str, it) for (sp_str_it_t it = sp_str_it(str); sp_str_it_valid(&it); sp_str_it_next(&it))
@@ -2385,8 +2737,6 @@ SP_API sp_str_t        sp_str_copy(sp_mem_t mem, sp_str_t str);
 SP_API sp_str_t        sp_str_concat(sp_mem_t mem, sp_str_t a, sp_str_t b);
 SP_API sp_str_t        sp_str_join(sp_mem_t mem, sp_str_t a, sp_str_t b, sp_str_t join);
 SP_API sp_str_t        sp_str_join_n(sp_mem_t mem, sp_str_t* strs, u32 n, sp_str_t joiner);
-SP_API sp_str_t        sp_str_reduce(sp_mem_t mem, sp_str_t* strs, u32 n, void* ud, sp_str_reduce_fn_t fn);
-SP_API void            sp_str_reduce_kernel_join(sp_str_reduce_context_t* context);
 SP_API c8*             sp_cstr_from_str(sp_mem_t mem, sp_str_t str);
 SP_API void            sp_str_copy_to(sp_str_t str, c8* buffer, u32 capacity);
 SP_API sp_str_t        sp_str_from_cstr(sp_mem_t mem, const c8* str);
@@ -2456,19 +2806,10 @@ SP_API u32             sp_utf8_to_lower(u32 codepoint);
 SP_API u32             sp_utf8_num_codepoints(sp_str_t str);
 SP_API sp_wide_str_t   sp_wide_str(const u16* str, u32 len);
 SP_API bool            sp_wtf8_validate(sp_str_t str);
-SP_API sp_wide_str_t   sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8);
-SP_API sp_str_t        sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16);
+SP_API sp_err_t        sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8, sp_wide_str_t* out);
+SP_API sp_err_t        sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16, sp_str_t* out);
 SP_API c8              sp_c8_to_upper(c8 c);
 SP_API c8              sp_c8_to_lower(c8 c);
-SP_API sp_da(sp_str_t) sp_str_map(sp_mem_t mem, sp_str_t* s, u32 n, void* ud, sp_str_map_fn_t fn);
-SP_API sp_str_t        sp_str_map_kernel_prepend(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_append(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_prefix(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_trim(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_pad(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_to_upper(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_to_lower(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_pascal_case(sp_str_map_context_t* context);
 SP_API s32             sp_str_sort_kernel_alphabetical(const void* a, const void* b);
 
 
@@ -2637,7 +2978,7 @@ SP_API void              sp_tm_epoch_to_iso8601_w(sp_io_writer_t* io, sp_tm_epoc
 // ░░░░░       ░░░░░ ░░░░░░░░░░░ ░░░░░░░░░░  ░░░░░░░░░     ░░░░░     ░░░░░░░░░     ░░░░░    ░░░░░░░░░░ ░░░░░     ░░░░░
 // @fs @filesystem
 #define SP_PATH_MAX 4096
-#define SP_FS_IT_BUF_SIZE 2048
+#define SP_FS_IT_BUF_SIZE SP_SYS_DIR_MIN_BUF
 
 typedef enum {
   SP_FS_LINK_HARD,
@@ -2662,9 +3003,20 @@ typedef struct {
 } sp_fs_entry_t;
 
 typedef struct {
-  sp_sys_fs_it_t sys;
-  SP_ALIGNED u8    buf [SP_FS_IT_BUF_SIZE];
-  sp_str_t         path;
+  sp_str_t name;
+  sp_fs_kind_t kind;
+} sp_fs_dir_entry_t;
+
+typedef struct {
+  sp_sys_dir_t dir;
+  sp_mem_buffer_t buf;
+  u64 cursor;
+} sp_fs_dir_t;
+
+typedef struct {
+  sp_fs_dir_t dir;
+  SP_ALIGNED u8 buf [SP_FS_IT_BUF_SIZE];
+  sp_str_t path;
 } sp_fs_it_frame_t;
 
 typedef struct {
@@ -2672,12 +3024,15 @@ typedef struct {
   sp_fs_entry_t entry;
   sp_da(sp_fs_it_frame_t) stack;
   bool recursive;
+  sp_err_t err;
 } sp_fs_it_t;
 
 #define sp_fs_for(mem, dir, it) \
   for (sp_fs_it_t it = sp_fs_it_new(mem, dir); sp_fs_it_valid(&it); sp_fs_it_next(&it))
 #define sp_fs_for_recursive(mem, dir, it) \
   for (sp_fs_it_t it = sp_fs_it_new_recursive(mem, dir); sp_fs_it_valid(&it); sp_fs_it_next(&it))
+#define sp_fs_for_it(it) \
+  for (; sp_fs_it_valid(&it); sp_fs_it_next(&it))
 
 SP_API sp_str_t             sp_fs_get_name(sp_str_t path);
 SP_API sp_str_t             sp_fs_parent_path(sp_str_t path);
@@ -2691,10 +3046,11 @@ SP_API bool                 sp_fs_is_absolute(sp_str_t path);
 SP_API bool                 sp_fs_is_absolute_for(sp_str_t path, sp_fs_path_kind_t kind);
 SP_API bool                 sp_fs_is_absolute_w(sp_wide_str_t path);
 SP_API bool                 sp_fs_is_glob(sp_str_t path);
+SP_API bool                 sp_fs_glob_match(sp_str_t name, sp_str_t glob);
 SP_API sp_str_t             sp_fs_join_path(sp_mem_t mem, sp_str_t a, sp_str_t b);
 SP_API sp_str_t             sp_fs_replace_ext(sp_mem_t mem, sp_str_t path, sp_str_t ext);
-SP_API sp_da(sp_fs_entry_t) sp_fs_collect(sp_mem_t mem, sp_str_t path);
-SP_API sp_da(sp_fs_entry_t) sp_fs_collect_recursive(sp_mem_t mem, sp_str_t path);
+SP_API sp_err_t             sp_fs_collect(sp_mem_t mem, sp_str_t path, sp_da(sp_fs_entry_t)* out);
+SP_API sp_err_t             sp_fs_collect_recursive(sp_mem_t mem, sp_str_t path, sp_da(sp_fs_entry_t)* out);
 SP_API bool                 sp_fs_exists(sp_str_t path);
 SP_API bool                 sp_fs_is_file(sp_str_t path);
 SP_API bool                 sp_fs_is_dir(sp_str_t path);
@@ -2715,14 +3071,18 @@ SP_API sp_err_t             sp_fs_create_hard_link(sp_str_t target, sp_str_t lin
 SP_API sp_err_t             sp_fs_create_sym_link(sp_str_t target, sp_str_t link_path);
 SP_API sp_err_t             sp_fs_link(sp_str_t from, sp_str_t to, sp_fs_link_kind_t kind);
 SP_API sp_err_t             sp_fs_copy(sp_str_t from, sp_str_t to);
-SP_API void                 sp_fs_copy_file(sp_str_t from, sp_str_t to);
-SP_API void                 sp_fs_copy_dir(sp_str_t from, sp_str_t to);
-SP_API void                 sp_fs_copy_glob(sp_str_t from, sp_str_t glob, sp_str_t to);
+SP_API sp_err_t             sp_fs_copy_file(sp_str_t from, sp_str_t to);
+SP_API sp_err_t             sp_fs_copy_dir(sp_str_t from, sp_str_t to);
+SP_API sp_err_t             sp_fs_copy_glob(sp_str_t from, sp_str_t glob, sp_str_t to);
+SP_API sp_err_t             sp_fs_dir_open(sp_fs_dir_t* it, sp_sys_fd_t fd, sp_str_t path, sp_mem_slice_t buf);
+SP_API sp_err_t             sp_fs_dir_next(sp_fs_dir_t* it, sp_fs_dir_entry_t* out);
+SP_API sp_err_t             sp_fs_dir_close(sp_fs_dir_t* it);
 SP_API sp_fs_it_t           sp_fs_it_new(sp_mem_t mem, sp_str_t path);
 SP_API sp_fs_it_t           sp_fs_it_new_recursive(sp_mem_t mem, sp_str_t path);
 SP_API void                 sp_fs_it_begin(sp_fs_it_t* it, sp_str_t path);
 SP_API void                 sp_fs_it_next(sp_fs_it_t* it);
 SP_API void                 sp_fs_it_push(sp_fs_it_t* it, sp_str_t path);
+SP_API void                 sp_fs_it_unwind(sp_fs_it_t* it);
 SP_API bool                 sp_fs_it_valid(sp_fs_it_t* it);
 SP_API void                 sp_fs_it_deinit(sp_fs_it_t* it);
 
@@ -2749,52 +3109,769 @@ SP_API sp_str_t             sp_fs_get_config_path(sp_mem_t mem);
 //     █████    █████   █████ █████   █████ ██████████ █████   █████ ██████████   █████ █████  ░░█████ ░░█████████
 //    ░░░░░    ░░░░░   ░░░░░ ░░░░░   ░░░░░ ░░░░░░░░░░ ░░░░░   ░░░░░ ░░░░░░░░░░   ░░░░░ ░░░░░    ░░░░░   ░░░░░░░░░
 // @threading @concurrency
+// @spin @spin_lock
+typedef s32 sp_spin_lock_t;
+
+SP_API void sp_spin_pause();
+SP_API bool sp_spin_try_lock(sp_spin_lock_t* lock);
+SP_API void sp_spin_lock(sp_spin_lock_t* lock);
+SP_API void sp_spin_unlock(sp_spin_lock_t* lock);
+SP_API sp_spin_lock_t* sp_spin_lock_get(void* addr);
+
 // @atomic
 typedef s32 sp_atomic_s32_t;
+typedef u32 sp_atomic_u32_t;
+typedef s64 sp_atomic_s64_t;
+typedef u64 sp_atomic_u64_t;
 typedef void* sp_atomic_ptr_t;
 
-SP_API bool  sp_atomic_s32_cas(sp_atomic_s32_t* value, s32 current, s32 desired);
-SP_API s32   sp_atomic_s32_set(sp_atomic_s32_t* value, s32 desired);
-SP_API s32   sp_atomic_s32_add(sp_atomic_s32_t* value, s32 add);
-SP_API s32   sp_atomic_s32_get(sp_atomic_s32_t* value);
-SP_API bool  sp_atomic_ptr_cas(sp_atomic_ptr_t* value, void* current, void* desired);
-SP_API void* sp_atomic_ptr_set(sp_atomic_ptr_t* value, void* desired);
-SP_API void* sp_atomic_ptr_get(sp_atomic_ptr_t* value);
-
-// @mutex
 typedef enum {
-  SP_MUTEX_NONE = 0,
-  SP_MUTEX_PLAIN = 1,
-  SP_MUTEX_TIMED = 2,
-  SP_MUTEX_RECURSIVE = 4
-} sp_mutex_kind_t;
+  SP_ATOMIC_RELAXED,
+  SP_ATOMIC_ACQUIRE,
+  SP_ATOMIC_RELEASE,
+  SP_ATOMIC_ACQ_REL,
+  SP_ATOMIC_SEQ_CST,
+} sp_atomic_order_t;
 
-#if defined(SP_WIN32)
-  typedef CRITICAL_SECTION sp_mutex_t;
-#elif defined(SP_FREESTANDING)
-  typedef s32 sp_mutex_t;
-#elif defined(SP_POSIX)
-  typedef pthread_mutex_t sp_mutex_t;
-#else
-  typedef s32 sp_mutex_t;
+#if defined(__ATOMIC_SEQ_CST) && (defined(SP_GNUC) || defined(SP_TCC))
+  #define SP_ATOMIC_GNU
 #endif
 
-SP_API void sp_mutex_init(sp_mutex_t* mutex, sp_mutex_kind_t kind);
+#if defined(SP_ATOMIC_GNU)
+SP_INLINE s32 sp_atomic_order_gnu(sp_atomic_order_t order) {
+  switch (order) {
+    case SP_ATOMIC_RELAXED: return __ATOMIC_RELAXED;
+    case SP_ATOMIC_ACQUIRE: return __ATOMIC_ACQUIRE;
+    case SP_ATOMIC_RELEASE: return __ATOMIC_RELEASE;
+    case SP_ATOMIC_ACQ_REL: return __ATOMIC_ACQ_REL;
+    case SP_ATOMIC_SEQ_CST: return __ATOMIC_SEQ_CST;
+  }
+  return __ATOMIC_SEQ_CST;
+}
+
+SP_INLINE s32 sp_atomic_order_gnu_load(sp_atomic_order_t order) {
+  switch (order) {
+    case SP_ATOMIC_RELAXED: return __ATOMIC_RELAXED;
+    case SP_ATOMIC_ACQUIRE: return __ATOMIC_ACQUIRE;
+    case SP_ATOMIC_RELEASE: return __ATOMIC_SEQ_CST;
+    case SP_ATOMIC_ACQ_REL: return __ATOMIC_SEQ_CST;
+    case SP_ATOMIC_SEQ_CST: return __ATOMIC_SEQ_CST;
+  }
+  return __ATOMIC_SEQ_CST;
+}
+
+SP_INLINE s32 sp_atomic_order_gnu_store(sp_atomic_order_t order) {
+  switch (order) {
+    case SP_ATOMIC_RELAXED: return __ATOMIC_RELAXED;
+    case SP_ATOMIC_ACQUIRE: return __ATOMIC_SEQ_CST;
+    case SP_ATOMIC_RELEASE: return __ATOMIC_RELEASE;
+    case SP_ATOMIC_ACQ_REL: return __ATOMIC_SEQ_CST;
+    case SP_ATOMIC_SEQ_CST: return __ATOMIC_SEQ_CST;
+  }
+  return __ATOMIC_SEQ_CST;
+}
+
+SP_INLINE s32 sp_atomic_order_gnu_fail(sp_atomic_order_t order) {
+  switch (order) {
+    case SP_ATOMIC_RELAXED: return __ATOMIC_RELAXED;
+    case SP_ATOMIC_ACQUIRE: return __ATOMIC_ACQUIRE;
+    case SP_ATOMIC_RELEASE: return __ATOMIC_RELAXED;
+    case SP_ATOMIC_ACQ_REL: return __ATOMIC_ACQUIRE;
+    case SP_ATOMIC_SEQ_CST: return __ATOMIC_SEQ_CST;
+  }
+  return __ATOMIC_SEQ_CST;
+}
+#endif
+
+SP_INLINE s32 sp_atomic_s32_load(sp_atomic_s32_t* value, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_load_n(value, sp_atomic_order_gnu_load(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      s32 result = __iso_volatile_load32((volatile s32*)value);
+      if (order != SP_ATOMIC_RELAXED) _ReadWriteBarrier();
+      return result;
+    #else
+      (void)order;
+      return (s32)_InterlockedOr((volatile long*)value, 0);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    s32 result = *(volatile s32*)value;
+    __sync_synchronize();
+    return result;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    s32 result = *value;
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void sp_atomic_s32_store(sp_atomic_s32_t* value, s32 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    __atomic_store_n(value, desired, sp_atomic_order_gnu_store(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      switch (order) {
+        case SP_ATOMIC_RELAXED: {
+          __iso_volatile_store32((volatile s32*)value, desired);
+          break;
+        }
+        case SP_ATOMIC_RELEASE: {
+          _ReadWriteBarrier();
+          __iso_volatile_store32((volatile s32*)value, desired);
+          break;
+        }
+        case SP_ATOMIC_ACQUIRE:
+        case SP_ATOMIC_ACQ_REL:
+        case SP_ATOMIC_SEQ_CST: {
+          _InterlockedExchange((volatile long*)value, (long)desired);
+          break;
+        }
+      }
+    #else
+      (void)order;
+      _InterlockedExchange((volatile long*)value, (long)desired);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    *(volatile s32*)value = desired;
+    __sync_synchronize();
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    *value = desired;
+    sp_spin_unlock(lock);
+  #endif
+}
+
+SP_INLINE s32 sp_atomic_s32_exchange(sp_atomic_s32_t* value, s32 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_exchange_n(value, desired, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (s32)_InterlockedExchange((volatile long*)value, (long)desired);
+  #elif defined(SP_GNUC)
+    (void)order;
+    s32 old = __sync_lock_test_and_set(value, desired);
+    __sync_synchronize();
+    return old;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    s32 old = *value;
+    *value = desired;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE s32 sp_atomic_s32_add(sp_atomic_s32_t* value, s32 add, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_fetch_add(value, add, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (s32)_InterlockedExchangeAdd((volatile long*)value, (long)add);
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_fetch_and_add(value, add);
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    s32 old = *value;
+    *value = (s32)((u32)old + (u32)add);
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE bool sp_atomic_s32_cas(sp_atomic_s32_t* value, s32 current, s32 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_compare_exchange_n(value, &current, desired, false, sp_atomic_order_gnu(order), sp_atomic_order_gnu_fail(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return _InterlockedCompareExchange((volatile long*)value, (long)desired, (long)current) == (long)current;
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_bool_compare_and_swap(value, current, desired);
+  #else
+    (void)order;
+    bool result = false;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    if (*value == current) {
+      *value = desired;
+      result = true;
+    }
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE u32 sp_atomic_u32_load(sp_atomic_u32_t* value, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_load_n(value, sp_atomic_order_gnu_load(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      u32 result = (u32)__iso_volatile_load32((volatile s32*)value);
+      if (order != SP_ATOMIC_RELAXED) _ReadWriteBarrier();
+      return result;
+    #else
+      (void)order;
+      return (u32)_InterlockedOr((volatile long*)value, 0);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    u32 result = *(volatile u32*)value;
+    __sync_synchronize();
+    return result;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    u32 result = *value;
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void sp_atomic_u32_store(sp_atomic_u32_t* value, u32 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    __atomic_store_n(value, desired, sp_atomic_order_gnu_store(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      switch (order) {
+        case SP_ATOMIC_RELAXED: {
+          __iso_volatile_store32((volatile s32*)value, (s32)desired);
+          break;
+        }
+        case SP_ATOMIC_RELEASE: {
+          _ReadWriteBarrier();
+          __iso_volatile_store32((volatile s32*)value, (s32)desired);
+          break;
+        }
+        case SP_ATOMIC_ACQUIRE:
+        case SP_ATOMIC_ACQ_REL:
+        case SP_ATOMIC_SEQ_CST: {
+          _InterlockedExchange((volatile long*)value, (long)desired);
+          break;
+        }
+      }
+    #else
+      (void)order;
+      _InterlockedExchange((volatile long*)value, (long)desired);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    *(volatile u32*)value = desired;
+    __sync_synchronize();
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    *value = desired;
+    sp_spin_unlock(lock);
+  #endif
+}
+
+SP_INLINE u32 sp_atomic_u32_exchange(sp_atomic_u32_t* value, u32 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_exchange_n(value, desired, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (u32)_InterlockedExchange((volatile long*)value, (long)desired);
+  #elif defined(SP_GNUC)
+    (void)order;
+    u32 old = __sync_lock_test_and_set(value, desired);
+    __sync_synchronize();
+    return old;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    u32 old = *value;
+    *value = desired;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE u32 sp_atomic_u32_add(sp_atomic_u32_t* value, u32 add, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_fetch_add(value, add, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (u32)_InterlockedExchangeAdd((volatile long*)value, (long)add);
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_fetch_and_add(value, add);
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    u32 old = *value;
+    *value = old + add;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE bool sp_atomic_u32_cas(sp_atomic_u32_t* value, u32 current, u32 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_compare_exchange_n(value, &current, desired, false, sp_atomic_order_gnu(order), sp_atomic_order_gnu_fail(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (u32)_InterlockedCompareExchange((volatile long*)value, (long)desired, (long)current) == current;
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_bool_compare_and_swap(value, current, desired);
+  #else
+    (void)order;
+    bool result = false;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    if (*value == current) {
+      *value = desired;
+      result = true;
+    }
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE u64 sp_atomic_u64_load(sp_atomic_u64_t* value, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_load_n(value, sp_atomic_order_gnu_load(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      u64 result = (u64)__iso_volatile_load64((volatile s64*)value);
+      if (order != SP_ATOMIC_RELAXED) _ReadWriteBarrier();
+      return result;
+    #else
+      (void)order;
+      return (u64)_InterlockedOr64((volatile __int64*)value, 0);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    u64 result = *(volatile u64*)value;
+    __sync_synchronize();
+    return result;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    u64 result = *value;
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void sp_atomic_u64_store(sp_atomic_u64_t* value, u64 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    __atomic_store_n(value, desired, sp_atomic_order_gnu_store(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      switch (order) {
+        case SP_ATOMIC_RELAXED: {
+          __iso_volatile_store64((volatile s64*)value, (s64)desired);
+          break;
+        }
+        case SP_ATOMIC_RELEASE: {
+          _ReadWriteBarrier();
+          __iso_volatile_store64((volatile s64*)value, (s64)desired);
+          break;
+        }
+        case SP_ATOMIC_ACQUIRE:
+        case SP_ATOMIC_ACQ_REL:
+        case SP_ATOMIC_SEQ_CST: {
+          _InterlockedExchange64((volatile __int64*)value, (__int64)desired);
+          break;
+        }
+      }
+    #else
+      (void)order;
+      _InterlockedExchange64((volatile __int64*)value, (__int64)desired);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    *(volatile u64*)value = desired;
+    __sync_synchronize();
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    *value = desired;
+    sp_spin_unlock(lock);
+  #endif
+}
+
+SP_INLINE u64 sp_atomic_u64_exchange(sp_atomic_u64_t* value, u64 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_exchange_n(value, desired, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (u64)_InterlockedExchange64((volatile __int64*)value, (__int64)desired);
+  #elif defined(SP_GNUC)
+    (void)order;
+    u64 old = __sync_lock_test_and_set(value, desired);
+    __sync_synchronize();
+    return old;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    u64 old = *value;
+    *value = desired;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE u64 sp_atomic_u64_add(sp_atomic_u64_t* value, u64 add, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_fetch_add(value, add, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (u64)_InterlockedExchangeAdd64((volatile __int64*)value, (__int64)add);
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_fetch_and_add(value, add);
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    u64 old = *value;
+    *value = old + add;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE bool sp_atomic_u64_cas(sp_atomic_u64_t* value, u64 current, u64 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_compare_exchange_n(value, &current, desired, false, sp_atomic_order_gnu(order), sp_atomic_order_gnu_fail(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (u64)_InterlockedCompareExchange64((volatile __int64*)value, (__int64)desired, (__int64)current) == current;
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_bool_compare_and_swap(value, current, desired);
+  #else
+    (void)order;
+    bool result = false;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    if (*value == current) {
+      *value = desired;
+      result = true;
+    }
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE s64 sp_atomic_s64_load(sp_atomic_s64_t* value, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_load_n(value, sp_atomic_order_gnu_load(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      s64 result = __iso_volatile_load64((volatile s64*)value);
+      if (order != SP_ATOMIC_RELAXED) _ReadWriteBarrier();
+      return result;
+    #else
+      (void)order;
+      return (s64)_InterlockedOr64((volatile __int64*)value, 0);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    s64 result = *(volatile s64*)value;
+    __sync_synchronize();
+    return result;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    s64 result = *value;
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void sp_atomic_s64_store(sp_atomic_s64_t* value, s64 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    __atomic_store_n(value, desired, sp_atomic_order_gnu_store(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      switch (order) {
+        case SP_ATOMIC_RELAXED: {
+          __iso_volatile_store64((volatile s64*)value, desired);
+          break;
+        }
+        case SP_ATOMIC_RELEASE: {
+          _ReadWriteBarrier();
+          __iso_volatile_store64((volatile s64*)value, desired);
+          break;
+        }
+        case SP_ATOMIC_ACQUIRE:
+        case SP_ATOMIC_ACQ_REL:
+        case SP_ATOMIC_SEQ_CST: {
+          _InterlockedExchange64((volatile __int64*)value, (__int64)desired);
+          break;
+        }
+      }
+    #else
+      (void)order;
+      _InterlockedExchange64((volatile __int64*)value, (__int64)desired);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    *(volatile s64*)value = desired;
+    __sync_synchronize();
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    *value = desired;
+    sp_spin_unlock(lock);
+  #endif
+}
+
+SP_INLINE s64 sp_atomic_s64_exchange(sp_atomic_s64_t* value, s64 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_exchange_n(value, desired, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (s64)_InterlockedExchange64((volatile __int64*)value, (__int64)desired);
+  #elif defined(SP_GNUC)
+    (void)order;
+    s64 old = __sync_lock_test_and_set(value, desired);
+    __sync_synchronize();
+    return old;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    s64 old = *value;
+    *value = desired;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE s64 sp_atomic_s64_add(sp_atomic_s64_t* value, s64 add, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_fetch_add(value, add, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return (s64)_InterlockedExchangeAdd64((volatile __int64*)value, (__int64)add);
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_fetch_and_add(value, add);
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    s64 old = *value;
+    *value = (s64)((u64)old + (u64)add);
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE bool sp_atomic_s64_cas(sp_atomic_s64_t* value, s64 current, s64 desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_compare_exchange_n(value, &current, desired, false, sp_atomic_order_gnu(order), sp_atomic_order_gnu_fail(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return _InterlockedCompareExchange64((volatile __int64*)value, (__int64)desired, (__int64)current) == (__int64)current;
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_bool_compare_and_swap(value, current, desired);
+  #else
+    (void)order;
+    bool result = false;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    if (*value == current) {
+      *value = desired;
+      result = true;
+    }
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void* sp_atomic_ptr_load(sp_atomic_ptr_t* value, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_load_n(value, sp_atomic_order_gnu_load(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      void* result = (void*)(size_t)__iso_volatile_load64((volatile s64*)value);
+      if (order != SP_ATOMIC_RELAXED) _ReadWriteBarrier();
+      return result;
+    #else
+      (void)order;
+      return _InterlockedCompareExchangePointer(value, SP_NULLPTR, SP_NULLPTR);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    void* result = *(void* volatile*)value;
+    __sync_synchronize();
+    return result;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    void* result = *value;
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void sp_atomic_ptr_store(sp_atomic_ptr_t* value, void* desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    __atomic_store_n(value, desired, sp_atomic_order_gnu_store(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      switch (order) {
+        case SP_ATOMIC_RELAXED: {
+          __iso_volatile_store64((volatile s64*)value, (s64)(size_t)desired);
+          break;
+        }
+        case SP_ATOMIC_RELEASE: {
+          _ReadWriteBarrier();
+          __iso_volatile_store64((volatile s64*)value, (s64)(size_t)desired);
+          break;
+        }
+        case SP_ATOMIC_ACQUIRE:
+        case SP_ATOMIC_ACQ_REL:
+        case SP_ATOMIC_SEQ_CST: {
+          _InterlockedExchangePointer(value, desired);
+          break;
+        }
+      }
+    #else
+      (void)order;
+      _InterlockedExchangePointer(value, desired);
+    #endif
+  #elif defined(SP_GNUC)
+    (void)order;
+    __sync_synchronize();
+    *(void* volatile*)value = desired;
+    __sync_synchronize();
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    *value = desired;
+    sp_spin_unlock(lock);
+  #endif
+}
+
+SP_INLINE void* sp_atomic_ptr_exchange(sp_atomic_ptr_t* value, void* desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_exchange_n(value, desired, sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return _InterlockedExchangePointer(value, desired);
+  #elif defined(SP_GNUC)
+    (void)order;
+    void* old;
+    do {
+      old = *(void* volatile*)value;
+    } while (!__sync_bool_compare_and_swap(value, old, desired));
+    __sync_synchronize();
+    return old;
+  #else
+    (void)order;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    void* old = *value;
+    *value = desired;
+    sp_spin_unlock(lock);
+    return old;
+  #endif
+}
+
+SP_INLINE bool sp_atomic_ptr_cas(sp_atomic_ptr_t* value, void* current, void* desired, sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    return __atomic_compare_exchange_n(value, &current, desired, false, sp_atomic_order_gnu(order), sp_atomic_order_gnu_fail(order));
+  #elif defined(SP_MSVC)
+    (void)order;
+    return _InterlockedCompareExchangePointer(value, desired, current) == current;
+  #elif defined(SP_GNUC)
+    (void)order;
+    return __sync_bool_compare_and_swap(value, current, desired);
+  #else
+    (void)order;
+    bool result = false;
+    sp_spin_lock_t* lock = sp_spin_lock_get(value);
+    sp_spin_lock(lock);
+    if (*value == current) {
+      *value = desired;
+      result = true;
+    }
+    sp_spin_unlock(lock);
+    return result;
+  #endif
+}
+
+SP_INLINE void sp_atomic_fence(sp_atomic_order_t order) {
+  #if defined(SP_ATOMIC_GNU)
+    __atomic_thread_fence(sp_atomic_order_gnu(order));
+  #elif defined(SP_MSVC)
+    #if defined(SP_AMD64)
+      if (order == SP_ATOMIC_SEQ_CST) MemoryBarrier();
+      else if (order != SP_ATOMIC_RELAXED) _ReadWriteBarrier();
+    #else
+      if (order != SP_ATOMIC_RELAXED) MemoryBarrier();
+    #endif
+  #elif defined(SP_GNUC)
+    if (order != SP_ATOMIC_RELAXED) __sync_synchronize();
+  #else
+    if (order != SP_ATOMIC_RELAXED) {
+      sp_spin_lock_t* lock = sp_spin_lock_get(SP_NULLPTR);
+      sp_spin_lock(lock);
+      sp_spin_unlock(lock);
+    }
+  #endif
+}
+
+// @mutex
+enum {
+  SP_MUTEX_UNLOCKED = 0,
+  SP_MUTEX_LOCKED = 1,
+  SP_MUTEX_CONTENDED = 2,
+};
+
+typedef struct {
+  sp_atomic_u32_t state;
+} sp_mutex_t;
+
+SP_API void sp_mutex_init(sp_mutex_t* mutex);
 SP_API void sp_mutex_lock(sp_mutex_t* mutex);
 SP_API void sp_mutex_unlock(sp_mutex_t* mutex);
 SP_API void sp_mutex_destroy(sp_mutex_t* mutex);
-SP_API s32  sp_mutex_kind_to_c11(sp_mutex_kind_t kind);
 
 // @cv @condition_variable @condvar
-#if defined(SP_WIN32)
-  typedef CONDITION_VARIABLE sp_cv_t;
-#elif defined(SP_FREESTANDING)
-  typedef s32 sp_cv_t;
-#elif defined(SP_POSIX)
-  typedef pthread_cond_t sp_cv_t;
-#else
-  typedef s32 sp_cv_t;
-#endif
+typedef struct {
+  sp_atomic_u32_t seq;
+} sp_cv_t;
 
 SP_API void sp_cv_init(sp_cv_t* cv);
 SP_API void sp_cv_destroy(sp_cv_t* cv);
@@ -2804,31 +3881,16 @@ SP_API void sp_cv_notify_one(sp_cv_t* cv);
 SP_API void sp_cv_notify_all(sp_cv_t* cv);
 
 // @semaphore
-#if defined(SP_WIN32)
-  typedef HANDLE sp_semaphore_t;
-#elif defined(SP_FREESTANDING)
-  typedef s32 sp_semaphore_t;
-#elif defined(SP_MACOS)
-  typedef dispatch_semaphore_t sp_semaphore_t;
-#elif defined(SP_POSIX)
-  typedef sem_t sp_semaphore_t;
-#else
-  typedef s32 sp_semaphore_t;
-#endif
+typedef struct {
+  sp_atomic_u32_t count;
+} sp_semaphore_t;
 
 SP_API void sp_semaphore_init(sp_semaphore_t* semaphore);
 SP_API void sp_semaphore_destroy(sp_semaphore_t* semaphore);
+SP_API bool sp_semaphore_try_wait(sp_semaphore_t* semaphore);
 SP_API void sp_semaphore_wait(sp_semaphore_t* semaphore);
 SP_API bool sp_semaphore_wait_for(sp_semaphore_t* semaphore, u32 ms);
 SP_API void sp_semaphore_signal(sp_semaphore_t* semaphore);
-
-// @spin @spin_lock
-typedef s32 sp_spin_lock_t;
-
-SP_API void sp_spin_pause();
-SP_API bool sp_spin_try_lock(sp_spin_lock_t* lock);
-SP_API void sp_spin_lock(sp_spin_lock_t* lock);
-SP_API void sp_spin_unlock(sp_spin_lock_t* lock);
 
 // @thread
 #if defined(SP_WIN32)
@@ -2852,6 +3914,7 @@ typedef struct {
 SP_API void sp_thread_init(sp_thread_t* thread, sp_thread_fn_t fn, void* userdata);
 SP_API void sp_thread_join(sp_thread_t* thread);
 SP_API s32  sp_thread_launch(void* userdata);
+SP_API u64  sp_thread_get_id();
 
 
 //     ███████     █████████
@@ -2892,17 +3955,11 @@ SP_API sp_str_t       sp_os_lib_kind_to_extension(sp_os_lib_kind_t kind);
 SP_API sp_str_t       sp_os_lib_to_file_name(sp_mem_t mem, sp_str_t lib, sp_os_lib_kind_t kind);
 SP_API void           sp_os_sleep_ms(f64 ms);
 SP_API void           sp_os_sleep_ns(u64 ns);
-SP_API void           sp_os_print(sp_str_t message);
-SP_API void           sp_os_print_err(sp_str_t message);
 SP_API sp_str_t       sp_os_env_get(sp_str_t key);
 SP_API sp_os_env_it_t sp_os_env_it_begin();
 SP_API bool           sp_os_env_it_valid(sp_os_env_it_t* it);
 SP_API void           sp_os_env_it_next(sp_os_env_it_t* it);
 SP_API void           sp_os_register_signal_handler(sp_os_signal_t, sp_os_signal_handler_t, void* userdata);
-SP_API bool           sp_os_is_tty(sp_sys_fd_t fd);
-SP_API void           sp_os_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows);
-SP_API s32            sp_os_tty_enter_raw(sp_sys_fd_t fd, sp_tty_mode_t* saved);
-SP_API s32            sp_os_tty_restore(sp_sys_fd_t fd, const sp_tty_mode_t* saved);
 SP_API void           sp_os_qsort(void* arr, u64 len, u64 stride, sp_qsort_fn_t);
 SP_API void           sp_assert_f(sp_str_t file, sp_str_t line, sp_str_t func, sp_str_t expr, bool cond);
 
@@ -2926,6 +3983,47 @@ SP_API sp_err_t  sp_fmt_io_v(sp_io_writer_t* io, sp_str_t fmt, va_list args);
 SP_API sp_err_t  sp_fmt_std_out(const c8* fmt, ...);
 SP_API sp_err_t  sp_fmt_std_err(const c8* fmt, ...);
 
+SP_API sp_err_t  sp_fmt_write_s64(sp_io_writer_t* io, s64 value);
+SP_API sp_err_t  sp_fmt_write_ptr(sp_io_writer_t* io, void* value);
+SP_API void      sp_fmt_write_hex(sp_io_writer_t* io, u64 value);
+SP_API void      sp_fmt_write_hex_upper(sp_io_writer_t* io, u64 value);
+SP_API void      sp_fmt_write_bin(sp_io_writer_t* io, u64 value);
+SP_API void      sp_fmt_write_oct(sp_io_writer_t* io, u64 value);
+SP_API sp_err_t  sp_fmt_write_bool(sp_io_writer_t* io, bool value);
+SP_API sp_err_t  sp_fmt_write_size(sp_io_writer_t* io, u64 bytes);
+SP_API sp_err_t  sp_fmt_write_duration(sp_io_writer_t* io, u64 ns);
+SP_API sp_err_t  sp_fmt_write_ordinal(sp_io_writer_t* io, s64 value);
+
+typedef enum {
+  SP_FMT_RADIX_DECIMAL,
+  SP_FMT_RADIX_BINARY,
+  SP_FMT_RADIX_OCTAL,
+  SP_FMT_RADIX_HEX,
+  SP_FMT_RADIX_HEX_UPPER,
+} sp_fmt_radix_t;
+
+SP_API sp_err_t sp_fmt_write_u64(sp_io_writer_t* io, u64 value);
+SP_API sp_err_t sp_fmt_write_u64_ex(sp_io_writer_t* io, u64 value, sp_fmt_radix_t radix);
+SP_API sp_str_r sp_fmt_write_u64_mem(sp_mem_t mem, u64 value, sp_fmt_radix_t radix);
+SP_API sp_str_r sp_fmt_write_u64_buf(c8* buffer, u64 len, u64 value, sp_fmt_radix_t radix);
+SP_API sp_err_t sp_fmt_write_f64(sp_io_writer_t* io, f64 value);
+SP_API sp_err_t sp_fmt_write_f64_ex(sp_io_writer_t* io, f64 value, u32 precision);
+
+SP_API sp_str_r sp_fmt_write_s64_mem(sp_mem_t mem, s64 value);
+SP_API sp_str_r sp_fmt_write_s64_buf(c8* buffer, u64 len, s64 value);
+SP_API sp_str_r sp_fmt_write_f64_mem(sp_mem_t mem, f64 value, u32 precision);
+SP_API sp_str_r sp_fmt_write_f64_buf(c8* buffer, u64 len, f64 value, u32 precision);
+SP_API sp_str_r sp_fmt_write_ptr_mem(sp_mem_t mem, void* value);
+SP_API sp_str_r sp_fmt_write_ptr_buf(c8* buffer, u64 len, void* value);
+SP_API sp_str_r sp_fmt_write_bool_mem(sp_mem_t mem, bool value);
+SP_API sp_str_r sp_fmt_write_bool_buf(c8* buffer, u64 len, bool value);
+SP_API sp_str_r sp_fmt_write_size_mem(sp_mem_t mem, u64 bytes);
+SP_API sp_str_r sp_fmt_write_size_buf(c8* buffer, u64 len, u64 bytes);
+SP_API sp_str_r sp_fmt_write_duration_mem(sp_mem_t mem, u64 ns);
+SP_API sp_str_r sp_fmt_write_duration_buf(c8* buffer, u64 len, u64 ns);
+SP_API sp_str_r sp_fmt_write_ordinal_mem(sp_mem_t mem, s64 value);
+SP_API sp_str_r sp_fmt_write_ordinal_buf(c8* buffer, u64 len, s64 value);
+
 typedef enum {
   SP_FMT_ALIGN_NONE,
   SP_FMT_ALIGN_LEFT,
@@ -2936,36 +4034,68 @@ typedef enum {
 #define SP_FMT_MAX_DIRECTIVES 8
 #define SP_FMT_WIDTH_MAX      4096
 
+#define sp_fmt_dynamic_directive(_i) (1u << (_i))
+#define SP_FMT_DYNAMIC_FILL          (1u << (SP_FMT_MAX_DIRECTIVES + 0))
+#define SP_FMT_DYNAMIC_WIDTH         (1u << (SP_FMT_MAX_DIRECTIVES + 1))
+#define SP_FMT_DYNAMIC_PRECISION     (1u << (SP_FMT_MAX_DIRECTIVES + 2))
+
 typedef enum {
-  sp_fmt_id_none   = 0,
-  sp_fmt_id_u64    = 1 << 0,
-  sp_fmt_id_s64    = 1 << 1,
-  sp_fmt_id_f64    = 1 << 2,
-  sp_fmt_id_str    = 1 << 3,
-  sp_fmt_id_ptr    = 1 << 4,
-  sp_fmt_id_custom = 1 << 5,
+  sp_fmt_id_none = 0,
+  sp_fmt_id_u64,
+  sp_fmt_id_s64,
+  sp_fmt_id_f64,
+  sp_fmt_id_str,
+  sp_fmt_id_ptr,
 } sp_fmt_arg_kind_t;
 
+typedef enum {
+  sp_fmt_style_none = 0,
+  sp_fmt_style_black,
+  sp_fmt_style_red,
+  sp_fmt_style_green,
+  sp_fmt_style_yellow,
+  sp_fmt_style_blue,
+  sp_fmt_style_magenta,
+  sp_fmt_style_cyan,
+  sp_fmt_style_white,
+  sp_fmt_style_gray,
+  sp_fmt_style_br_red,
+  sp_fmt_style_br_green,
+  sp_fmt_style_br_yellow,
+  sp_fmt_style_br_blue,
+  sp_fmt_style_br_magenta,
+  sp_fmt_style_br_cyan,
+  sp_fmt_style_br_white,
+  sp_fmt_style_bold,
+  sp_fmt_style_italic,
+  sp_fmt_style_hyperlink,
+  sp_fmt_style_quote,
+  sp_fmt_style_unset,
+} sp_fmt_style_t;
+
+typedef enum {
+  SP_FMT_STYLE_ATTR_NONE = 0,
+  SP_FMT_STYLE_ATTR_BOLD = 1,
+  SP_FMT_STYLE_ATTR_ITALIC = 2,
+  SP_FMT_STYLE_ATTR_HYPERLINK = 4,
+} sp_fmt_style_attr_t;
+
 typedef struct {
+  c8 renderer;
   u32 width;
   sp_fmt_align_t align;
   u8 fill;
   sp_opt(u8) precision;
-  struct {
-    u8 fill;
-    u8 width;
-    u8 precision;
-    u8 directive;
-  } dynamic;
+  u16 dynamic;
   struct {
     u8 num;
     sp_str_t names [SP_FMT_MAX_DIRECTIVES];
-    sp_str_t args [SP_FMT_MAX_DIRECTIVES];
+    sp_fmt_style_t styles [SP_FMT_MAX_DIRECTIVES];
   } directive;
 } sp_fmt_spec_t;
 
 typedef struct sp_fmt_arg sp_fmt_arg_t;
-SP_TYPEDEF_FN(void, sp_fmt_fn_t, sp_io_writer_t*, sp_fmt_arg_t*, sp_fmt_arg_t*);
+SP_TYPEDEF_FN(sp_err_t, sp_fmt_fn_t, sp_io_writer_t*, sp_fmt_arg_t*);
 
 typedef union {
   u64 u;
@@ -2973,40 +4103,37 @@ typedef union {
   f64 f;
   sp_str_t s;
   void* p;
-  struct { sp_fmt_fn_t fn; void* ptr; } custom;
 } sp_fmt_value_t;
 
 typedef struct {
   sp_fmt_arg_kind_t id;
   sp_fmt_value_t value;
+  sp_fmt_fn_t fn;
 } sp_fmt_argv_t;
 
 struct sp_fmt_arg {
   sp_fmt_arg_kind_t id;
   sp_fmt_spec_t spec;
   sp_fmt_value_t value;
+  sp_fmt_fn_t fn;
 };
 
-typedef enum {
-  sp_fmt_directive_renderer,
-  sp_fmt_directive_decorator,
-} sp_fmt_directive_kind_t;
+typedef struct {
+  u32 start;
+  u32 len;
+  sp_fmt_style_t style;
+} sp_fmt_span_t;
 
 typedef struct {
-  sp_fmt_directive_kind_t kind;
-  sp_fmt_arg_kind_t args;
-  sp_fmt_arg_kind_t params;
-  union {
-    struct {
-      sp_fmt_fn_t before;
-      sp_fmt_fn_t after;
-    } decorator;
-    sp_fmt_fn_t renderer;
-  };
-} sp_fmt_directive_t;
+  sp_str_t text;
+  sp_da(sp_fmt_span_t) spans;
+  sp_err_t err;
+} sp_fmt_styled_r;
 
-SP_API void      sp_fmt_render_default(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* param);
-SP_API void      sp_fmt_directive_register(const c8* name, sp_fmt_directive_t directive);
+SP_API sp_fmt_styled_r sp_fmt_styled(sp_mem_t mem, const c8* fmt, ...);
+SP_API sp_fmt_styled_r sp_fmt_styled_v(sp_mem_t mem, sp_str_t fmt, va_list args);
+SP_API const c8*       sp_fmt_style_to_ansi(sp_fmt_style_t style);
+SP_API u8              sp_fmt_style_to_ansi_u8(sp_fmt_style_t style);
 
 #define sp_fmt_uint(_value)  (sp_fmt_argv_t) { .id = sp_fmt_id_u64, .value = { .u = (_value) } }
 #define sp_fmt_int(_value)   (sp_fmt_argv_t) { .id = sp_fmt_id_s64, .value = { .i = (_value) } }
@@ -3015,6 +4142,29 @@ SP_API void      sp_fmt_directive_register(const c8* name, sp_fmt_directive_t di
 #define sp_fmt_str(_value)   (sp_fmt_argv_t) { .id = sp_fmt_id_str, .value = { .s = (_value) } }
 #define sp_fmt_cstr(_value)  (sp_fmt_argv_t) { .id = sp_fmt_id_str, .value = { .s = sp_cstr_as_str(_value) } }
 #define sp_fmt_ptr(_value)   (sp_fmt_argv_t) { .id = sp_fmt_id_ptr, .value = { .p = (_value) } }
+#define sp_fmt_u64_custom(_value, _fn) (sp_fmt_argv_t) { .id = sp_fmt_id_u64, .value = { .u = (_value) }, .fn = (_fn) }
+
+#define sp_fmt_style(_style) (sp_fmt_argv_t) { .id = sp_fmt_id_s64, .value = { .i = (_style) } }
+#define sp_fmt_black()       sp_fmt_style(sp_fmt_style_black)
+#define sp_fmt_red()         sp_fmt_style(sp_fmt_style_red)
+#define sp_fmt_green()       sp_fmt_style(sp_fmt_style_green)
+#define sp_fmt_yellow()      sp_fmt_style(sp_fmt_style_yellow)
+#define sp_fmt_blue()        sp_fmt_style(sp_fmt_style_blue)
+#define sp_fmt_magenta()     sp_fmt_style(sp_fmt_style_magenta)
+#define sp_fmt_cyan()        sp_fmt_style(sp_fmt_style_cyan)
+#define sp_fmt_white()       sp_fmt_style(sp_fmt_style_white)
+#define sp_fmt_gray()        sp_fmt_style(sp_fmt_style_gray)
+#define sp_fmt_br_red()      sp_fmt_style(sp_fmt_style_br_red)
+#define sp_fmt_br_green()    sp_fmt_style(sp_fmt_style_br_green)
+#define sp_fmt_br_yellow()   sp_fmt_style(sp_fmt_style_br_yellow)
+#define sp_fmt_br_blue()     sp_fmt_style(sp_fmt_style_br_blue)
+#define sp_fmt_br_magenta()  sp_fmt_style(sp_fmt_style_br_magenta)
+#define sp_fmt_br_cyan()     sp_fmt_style(sp_fmt_style_br_cyan)
+#define sp_fmt_br_white()    sp_fmt_style(sp_fmt_style_br_white)
+#define sp_fmt_bold()        sp_fmt_style(sp_fmt_style_bold)
+#define sp_fmt_italic()      sp_fmt_style(sp_fmt_style_italic)
+#define sp_fmt_hyperlink()   sp_fmt_style(sp_fmt_style_hyperlink)
+#define sp_fmt_quote()       sp_fmt_style(sp_fmt_style_quote)
 
 // Use a tiny, portable trick to get some damn good type safety for custom format string arguments:
 //
@@ -3044,44 +4194,11 @@ SP_API void      sp_fmt_directive_register(const c8* name, sp_fmt_directive_t di
 //    sp_fmt("{}", sp_fmt_foo(my_foo));
 //
 #define sp_fmt_custom(T, _fn, _value) (   \
-  (void)sizeof(*(T*)0 = (_value)),  \
-  (sp_fmt_argv_t) {                     \
-    .id = sp_fmt_id_custom,            \
-    .value = { \
-      .custom = {                           \
-        .fn = (_fn),        \
-        .ptr = (void*)&(_value)             \
-      } \
-    }                                     \
-  })
-#define sp_fmt_custom_v(T, _fn, ...) (   \
-  (void)sizeof(*(T*)0 = (__VA_ARGS__)),  \
-  (sp_fmt_argv_t) {                     \
-    .id = sp_fmt_id_custom,            \
-    .value.custom = {                           \
-      .fn = (_fn),        \
-      .ptr = (void*)&(__VA_ARGS__)        \
-    }                                     \
-  })
-
-#define sp_fmt_register_renderer(_name, _fn, _args) \
-  sp_fmt_directive_register(_name, (sp_fmt_directive_t) { \
-    .kind = sp_fmt_directive_renderer, \
-    .args = _args, \
-    .renderer = _fn, \
-  })
-
-#define sp_fmt_register_decorator(_name, _before, _after) \
-  sp_fmt_directive_register(_name, (sp_fmt_directive_t) { \
-    .kind = sp_fmt_directive_decorator, \
-    .decorator = { .before = (_before), .after = (_after) }, \
-  })
-
-#define sp_fmt_register_decorator_p(_name, _before, _after, _params) \
-  sp_fmt_directive_register(_name, (sp_fmt_directive_t) { \
-    .kind = sp_fmt_directive_decorator, \
-    .params = sp_cast(sp_fmt_arg_kind_t, _params), \
-    .decorator = { .before = (_before), .after = (_after) }, \
+  (void)sizeof(*(T*)0 = (_value)),        \
+  (sp_fmt_argv_t) {                       \
+    .id = sp_fmt_id_ptr,                  \
+    .value = { .p = (void*)&(_value) },   \
+    .fn = (_fn),                          \
   })
 
 
@@ -3167,13 +4284,6 @@ typedef struct {
   } mem;
   sp_mem_arena_t* scratch [2];
   sp_env_t env;
-  struct {
-    sp_ht(sp_str_t, sp_fmt_directive_t) directives;
-  } format;
-  struct {
-    sp_io_stream_writer_t* out;
-    sp_io_stream_writer_t* err;
-  } std;
 } sp_tls_rt_t;
 
 #if defined(SP_WIN32)
@@ -3181,6 +4291,7 @@ typedef s32 sp_nt_status_t;
 
 #define SP_NT_SUCCESS(s) ((sp_nt_status_t)(s) >= 0)
 #define SP_NT_STATUS_SUCCESS             ((sp_nt_status_t)0x00000000)
+#define SP_NT_STATUS_TIMEOUT             ((sp_nt_status_t)0x00000102)
 #define SP_NT_STATUS_NAME_TOO_LONG       ((sp_nt_status_t)0xC0000106)
 #define SP_NT_STATUS_OBJECT_NAME_INVALID ((sp_nt_status_t)0xC0000033)
 
@@ -3192,7 +4303,7 @@ typedef struct {
 
 typedef struct {
   sp_nt_unicode_string_t name;
-  u16* heap_buffer;
+  u16 data [SP_PATH_MAX + 1];
 } sp_sys_nt_path_t;
 
 typedef struct {
@@ -3215,42 +4326,74 @@ typedef struct {
   uintptr_t Information;
 } sp_nt_io_status_block_t;
 
-#define SP_NT_FUNCS(X)                                                                                      \
-  X(sp_nt_status_t, RtlDosPathNameToNtPathName_U_WithStatus, (const u16*, sp_nt_unicode_string_t*, u16**, void*)) \
-  X(s32,            RtlFreeHeap,                             (void*, u32, void*)) \
+////////
+// NT //
+////////
+#define SP_NT_FUNCTIONS(X)                                                                                      \
+  X(u32,            RtlGetFullPathName_U,                    (const u16*, u32, u16*, u16**)) \
   X(sp_nt_status_t, RtlSetCurrentDirectory_U,                (sp_nt_unicode_string_t*))  \
   X(sp_nt_status_t, NtClose,                                 (void*))                         \
   X(sp_nt_status_t, NtSetInformationFile,                    (void*, sp_nt_io_status_block_t*, void*, u32, u32)) \
   X(sp_nt_status_t, NtCreateFile,                            (void**, u32, sp_nt_object_attributes_t*, sp_nt_io_status_block_t*, s64*, u32, u32, u32, u32, void*, u32)) \
-  X(sp_nt_status_t, NtQueryObject,                           (void*, u32, void*, u32, u32*))
+  X(sp_nt_status_t, NtQueryObject,                           (void*, u32, void*, u32, u32*))      \
+  X(sp_nt_status_t, NtQueryDirectoryFile,                    (void*, void*, void*, void*, sp_nt_io_status_block_t*, void*, u32, u32, u8, sp_nt_unicode_string_t*, u8)) \
+  X(sp_nt_status_t, NtFsControlFile,                         (void*, void*, void*, void*, sp_nt_io_status_block_t*, u32, void*, u32, void*, u32)) \
+  X(sp_nt_status_t, NtCreateNamedPipeFile,                   (void**, u32, sp_nt_object_attributes_t*, sp_nt_io_status_block_t*, u32, u32, u32, u32, u32, u32, u32, u32, u32, s64*)) \
+  X(sp_nt_status_t, NtOpenFile,                              (void**, u32, sp_nt_object_attributes_t*, sp_nt_io_status_block_t*, u32, u32)) \
+  X(sp_nt_status_t, NtReadFile,                              (void*, void*, void*, void*, sp_nt_io_status_block_t*, void*, u32, s64*, u32*)) \
+  X(sp_nt_status_t, NtWriteFile,                             (void*, void*, void*, void*, sp_nt_io_status_block_t*, const void*, u32, s64*, u32*)) \
+  X(sp_nt_status_t, NtQueryInformationFile,                  (void*, sp_nt_io_status_block_t*, void*, u32, u32)) \
+  X(sp_nt_status_t, NtQueryVolumeInformationFile,            (void*, sp_nt_io_status_block_t*, void*, u32, u32)) \
+  X(sp_nt_status_t, NtWaitForSingleObject,                   (void*, u8, s64*)) \
+  X(sp_nt_status_t, RtlWaitOnAddress,                        (volatile void*, void*, size_t, s64*)) \
+  X(void,           RtlWakeAddressSingle,                    (void*)) \
+  X(void,           RtlWakeAddressAll,                       (void*))
 
-
-#define SP_NT_DECL(ret, name, args) ret (__stdcall *name) args;
-typedef struct { SP_NT_FUNCS(SP_NT_DECL) } sp_nt_dispatch_t;
-#undef SP_NT_DECL
-
-SP_API sp_nt_status_t sp_sys_nt_path(sp_str_t utf8, sp_sys_nt_path_t* out);
-SP_API void           sp_sys_nt_path_free(sp_sys_nt_path_t* path);
-#endif
+#define SP_NT_DECLARE_FUNCTION(ret, name, args) \
+  ret (__stdcall *name) args;
 
 typedef struct {
-  sp_os_signal_handler_t signal_handlers[3];
-  void* signal_userdata[3];
-  sp_mutex_t mutex;
-  sp_spin_lock_t locks [SP_RT_NUM_SPIN_LOCKS];
-  struct {
-    sp_tls_key_t key;
-    sp_tls_once_t once;
-  } tls;
-#if defined(SP_WIN32)
-  sp_nt_dispatch_t nt;
+  SP_NT_FUNCTIONS(SP_NT_DECLARE_FUNCTION)
+} sp_nt_dispatch_t;
+
+/////////
+// WS2 //
+/////////
+#define SP_WS2_FUNCTIONS(X) \
+  X(int,    WSAStartup,      (WORD, WSADATA*)) \
+  X(int,    WSAGetLastError, (void)) \
+  X(int,    WSAIoctl,        (SOCKET, DWORD, void*, DWORD, void*, DWORD, DWORD*, WSAOVERLAPPED*, LPWSAOVERLAPPED_COMPLETION_ROUTINE)) \
+  X(int,    WSAPoll,         (WSAPOLLFD*, ULONG, INT)) \
+  X(SOCKET, WSASocketW,      (int, int, int, LPWSAPROTOCOL_INFOW, GROUP, DWORD)) \
+  X(SOCKET, socket,          (int, int, int)) \
+  X(int,    bind,            (SOCKET, const struct sockaddr*, int)) \
+  X(int,    listen,          (SOCKET, int)) \
+  X(int,    connect,         (SOCKET, const struct sockaddr*, int)) \
+  X(SOCKET, accept,          (SOCKET, struct sockaddr*, int*)) \
+  X(int,    closesocket,     (SOCKET)) \
+  X(int,    recv,            (SOCKET, char*, int, int)) \
+  X(int,    send,            (SOCKET, const char*, int, int)) \
+  X(int,    ioctlsocket,     (SOCKET, long, u_long*)) \
+  X(int,    setsockopt,      (SOCKET, int, int, const char*, int)) \
+  X(int,    getsockopt,      (SOCKET, int, int, char*, int*)) \
+  X(int,    getsockname,     (SOCKET, struct sockaddr*, int*))
+
+#define SP_WS2_DECLARE_FUNCTION_POINTER(ret, name, args) \
+  ret (__stdcall *name) args;
+
+typedef struct {
+  SP_WS2_FUNCTIONS(SP_WS2_DECLARE_FUNCTION_POINTER)
+} sp_ws2_dispatch_t;
+
+SP_API sp_nt_status_t sp_sys_nt_path(sp_str_t utf8, sp_sys_nt_path_t* out);
 #endif
-} sp_rt_t;
+
+
+#define SP_SYS_SUPPORT_COPY_FILE_RANGE 0
+#define SP_SYS_SUPPORT_SENDFILE 1
 
 sp_tls_rt_t*   sp_tls_rt_get();
 void           sp_sys_tls_init(sp_tls_rt_t* tls);
-
-SP_API sp_rt_t sp_rt;
 
 
 /*
@@ -3296,26 +4439,23 @@ typedef enum {
 } sp_io_whence_t;
 
 typedef enum {
-  SP_IO_MODE_READ   = 1 << 0,
-  SP_IO_MODE_WRITE  = 1 << 1,
-  SP_IO_MODE_APPEND = 1 << 2,
-} sp_io_mode_t;
-
-typedef enum {
   SP_IO_CLOSE_MODE_NONE,
   SP_IO_CLOSE_MODE_AUTO,
 } sp_io_close_mode_t;
 
 SP_TYPEDEF_FN(sp_err_t, sp_io_reader_read_cb, sp_io_reader_t* r, void* ptr, u64 size, u64* bytes_read);
 SP_TYPEDEF_FN(sp_err_t, sp_io_seek_cb, sp_io_reader_t* r, s64 offset, sp_io_whence_t whence, s64* position);
-SP_TYPEDEF_FN(sp_err_t, sp_io_reader_as_fd_cb, sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos);
+SP_TYPEDEF_FN(sp_err_t, sp_io_reader_as_file_cb, sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos);
+SP_TYPEDEF_FN(sp_err_t, sp_io_reader_discard_cb, sp_io_reader_t* r, u64 n, u64* discarded);
 
 SP_TYPEDEF_FN(sp_err_t, sp_io_writer_write_cb, sp_io_writer_t* w, const void* ptr, u64 size, u64* bytes_written);
-SP_TYPEDEF_FN(sp_err_t, sp_io_writer_read_from_cb, sp_io_writer_t* w, sp_io_reader_t* r, u64* bytes_moved);
+
+SP_TYPEDEF_FN(sp_err_t, sp_io_writer_transfer_cb, sp_io_writer_t* w, sp_sys_fd_t fd, u64* pos, u64 count, u64* bytes_moved);
 
 struct sp_io_reader {
   sp_io_reader_read_cb read;
-  sp_io_reader_as_fd_cb as_fd;
+  sp_io_reader_as_file_cb as_file;
+  sp_io_reader_discard_cb discard;
   sp_mem_buffer_t buffer;
   u64 cursor;
 };
@@ -3342,7 +4482,7 @@ typedef struct {
 
 struct sp_io_writer {
   sp_io_writer_write_cb write;
-  sp_io_writer_read_from_cb read_from;
+  sp_io_writer_transfer_cb transfer;
   sp_mem_buffer_t buffer;
 };
 
@@ -3374,14 +4514,69 @@ struct sp_io_dyn_mem_writer {
   u64 cursor;
 };
 
+typedef struct {
+  sp_io_reader_t base;
+  sp_sys_socket_t socket;
+  u32 timeout_ms;
+} sp_io_socket_reader_t;
+
+typedef struct {
+  sp_io_writer_t base;
+  sp_sys_socket_t socket;
+  u32 timeout_ms;
+} sp_io_socket_writer_t;
+
+// Serves at most `remaining` bytes from `inner`, then reports EOF. If `inner`
+// hits EOF first, that EOF passes through and `remaining` stays nonzero.
+typedef struct {
+  sp_io_reader_t base;
+  sp_io_reader_t* inner;
+  u64 remaining;
+} sp_io_limit_reader_t;
+
+typedef struct {
+  const sp_sys_vtable_t* vt;
+  sp_os_signal_handler_t signal_handlers[3];
+  void* signal_userdata[3];
+  sp_spin_lock_t locks [SP_RT_NUM_SPIN_LOCKS];
+  struct {
+    sp_tls_key_t key;
+    sp_tls_once_t once;
+  } tls;
+  struct {
+    sp_io_stream_writer_t out;
+    sp_io_stream_writer_t err;
+  } std;
+  sp_atomic_s32_t unsupported [8];
+  sp_err_str_fn_t err_str;
+#if defined(SP_WIN32)
+  sp_nt_dispatch_t nt;
+  sp_ws2_dispatch_t ws2;
+  sp_atomic_ptr_t pipe_device;
+#endif
+} sp_rt_t;
+
+SP_API sp_rt_t sp_rt;
 
 SP_API sp_err_t       sp_io_copy(sp_io_writer_t* dst, sp_io_reader_t* src, u64* bytes_copied);
 SP_API sp_err_t       sp_io_copy_b(sp_io_writer_t* dst, sp_io_reader_t* src, u8* buffer, u64 n, u64* bytes_copied);
 
 SP_API sp_err_t       sp_io_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read);
+SP_API sp_err_t       sp_io_read_all(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read);
 SP_API sp_err_t       sp_io_read_file(sp_mem_t mem, sp_str_t path, sp_str_t* content);
 SP_API void           sp_io_reader_from_mem(sp_io_reader_t* reader, const void* ptr, u64 size);
 SP_API void           sp_io_reader_set_buffer(sp_io_reader_t* reader, u8* buf, u64 capacity);
+
+SP_API sp_err_t       sp_io_peek(sp_io_reader_t* reader, sp_str_t* out);
+SP_API sp_err_t       sp_io_peek_until(sp_io_reader_t* reader, sp_str_t delim, sp_str_t* out);
+SP_API sp_err_t       sp_io_fill(sp_io_reader_t* reader);
+SP_API sp_err_t       sp_io_fill_more(sp_io_reader_t* reader);
+SP_API void           sp_io_consume(sp_io_reader_t* reader, u64 n);
+SP_API sp_err_t       sp_io_discard(sp_io_reader_t* reader, u64 n, u64* discarded);
+
+SP_API void           sp_io_socket_reader_init(sp_io_socket_reader_t* r, sp_sys_socket_t socket, u32 timeout_ms);
+SP_API void           sp_io_socket_writer_init(sp_io_socket_writer_t* w, sp_sys_socket_t socket, u32 timeout_ms);
+SP_API void           sp_io_limit_reader_init(sp_io_limit_reader_t* r, sp_io_reader_t* inner, u64 limit);
 
 SP_API sp_err_t       sp_io_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written);
 SP_API sp_err_t       sp_io_write_str(sp_io_writer_t* writer, sp_str_t str, u64* bytes_written);
@@ -3412,6 +4607,7 @@ SP_API sp_err_t       sp_io_file_writer_size_force(sp_io_file_writer_t* w, u64* 
 SP_API sp_err_t       sp_io_file_writer_close(sp_io_file_writer_t* w);
 
 SP_API void           sp_io_stream_reader_from_fd(sp_io_stream_reader_t* r, sp_sys_fd_t fd, sp_io_close_mode_t mode);
+SP_API void           sp_io_stream_reader_from_file(sp_io_stream_reader_t* r, sp_sys_fd_t file, sp_io_close_mode_t mode);
 SP_API sp_err_t       sp_io_stream_reader_close(sp_io_stream_reader_t* r);
 
 SP_API void           sp_io_stream_writer_from_fd(sp_io_stream_writer_t* w, sp_sys_fd_t fd, sp_io_close_mode_t mode);
@@ -3431,8 +4627,8 @@ SP_API sp_str_t       sp_io_dyn_mem_writer_as_str(sp_io_dyn_mem_writer_t* w);
 SP_API sp_str_t       sp_io_dyn_mem_writer_take_str(sp_io_dyn_mem_writer_t* w);
 SP_API const c8*      sp_io_dyn_mem_writer_as_cstr(sp_io_dyn_mem_writer_t* w);
 
-SP_API sp_io_stream_writer_t sp_io_get_std_out();
-SP_API sp_io_stream_writer_t sp_io_get_std_err();
+SP_API sp_io_writer_t* sp_io_get_std_out();
+SP_API sp_io_writer_t* sp_io_get_std_err();
 
 
 //  ███████████  ███████████      ███████      █████████  ██████████  █████████   █████████
@@ -3558,6 +4754,7 @@ typedef struct {
   sp_str_t out;
   sp_str_t err;
   sp_ps_status_t status;
+  sp_err_t error;
 } sp_ps_output_t;
 
 typedef struct sp_ps_os sp_ps_os_t;
@@ -3631,7 +4828,6 @@ struct sp_app {
 
   s32 rc;
   sp_app_result_t result;
-  sp_atomic_s32_t shutdown;
 
   bool initted;
   bool deinitted;
@@ -3719,24 +4915,26 @@ SP_END_EXTERN_C()
 
 SP_BEGIN_EXTERN_C()
 
+SP_API sp_err_t sp_sys_is_supported(u32 what);
+SP_API void     sp_sys_mark_supported(u32 what);
+SP_API sp_err_t sp_sys_mark_unsupported(u32 what);
+
 // @format
 typedef struct {
   sp_str_t str;
   u32 i;
 } sp_fmt_parser_t;
 
-SP_IMP sp_fmt_directive_t* sp_fmt_directive_lookup(sp_str_t name);
-SP_IMP void                sp_fmt_register_builtins();
+SP_IMP sp_err_t            sp_fmt_style_from_name(sp_str_t name, sp_fmt_style_t* out);
+SP_IMP sp_fmt_style_t      sp_fmt_style_from_attr(sp_fmt_style_attr_t attr);
 SP_IMP c8*                 sp_fmt_uint_to_buf_dec(u64 value, c8* buf_end);
 SP_IMP c8*                 sp_fmt_uint_to_buf_hex_ex(u64 value, c8* buf_end, const c8* digits);
 SP_IMP c8*                 sp_fmt_uint_to_buf_hex(u64 value, c8* buf_end);
-SP_IMP void                sp_fmt_write_u64(sp_io_writer_t* io, u64 value);
-SP_IMP void                sp_fmt_write_s64(sp_io_writer_t* io, s64 value);
-SP_IMP void                sp_fmt_write_f64(sp_io_writer_t* io, f64 value, u32 precision);
-SP_IMP void                sp_fmt_write_ptr(sp_io_writer_t* io, void* value);
-SP_IMP sp_err_t            sp_fmt_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params);
+SP_IMP c8*                 sp_fmt_uint_to_buf_bin(u64 value, c8* buf_end);
+SP_IMP c8*                 sp_fmt_uint_to_buf_oct(u64 value, c8* buf_end);
+SP_IMP sp_err_t            sp_fmt_render(sp_io_writer_t* io, sp_fmt_arg_t* arg);
+SP_IMP sp_err_t            sp_fmt_render_bytes(sp_io_writer_t* io, sp_fmt_arg_t* arg);
 SP_IMP sp_err_t            sp_fmt_parse_specifier(sp_fmt_parser_t* p, sp_fmt_spec_t* spec);
-SP_IMP sp_str_t            sp_fmt_color_to_ansi_fg(sp_str_t id);
 SP_IMP sp_fmt_arg_t        sp_fmt_arg_from_argv(sp_fmt_argv_t v);
 
 
@@ -3768,22 +4966,21 @@ SP_IMP BOOL CALLBACK   sp_tls_once_trampoline(PINIT_ONCE once, PVOID param, PVOI
 #endif
 
 // @fs
-SP_IMP sp_fs_kind_t sp_fs_lstat_kind(sp_str_t path);
-SP_IMP sp_fs_kind_t sp_fs_stat_kind(sp_str_t path);
+SP_IMP sp_fs_kind_t sp_fs_get_link_kind(sp_str_t path);
+SP_IMP sp_err_t     sp_fs_copy_file_meta(sp_str_t from, sp_str_t to, const sp_sys_file_meta_t* st);
 
 // @tls
 SP_PRIVATE void  sp_tls_new(sp_tls_key_t* key, sp_tls_deinit_fn_t fn);
 SP_PRIVATE void* sp_tls_get(sp_tls_key_t key);
 SP_PRIVATE void  sp_tls_set(sp_tls_key_t key, void* data);
 SP_PRIVATE void  sp_tls_once(sp_tls_once_t* once, sp_tls_once_fn_t);
-SP_PRIVATE sp_io_writer_t* sp_tls_std_out(sp_tls_rt_t* tls);
-SP_PRIVATE sp_io_writer_t* sp_tls_std_err(sp_tls_rt_t* tls);
 
 // @io
 SP_IMP sp_err_t sp_io_file_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read);
+SP_IMP sp_err_t sp_io_file_reader_discard(sp_io_reader_t* reader, u64 n, u64* discarded);
 SP_IMP sp_err_t sp_io_file_reader_seek_cb(sp_io_reader_t* reader, s64 offset, sp_io_whence_t whence, s64* position);
 SP_IMP sp_err_t sp_io_stream_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read);
-SP_IMP sp_err_t sp_io_stream_reader_as_fd(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos);
+SP_IMP sp_err_t sp_io_stream_reader_as_file(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos);
 SP_IMP sp_err_t sp_io_eof_read(sp_io_reader_t* r, void* ptr, u64 size, u64* bytes_read);
 SP_IMP sp_err_t sp_io_file_writer_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written);
 SP_IMP sp_err_t sp_io_stream_writer_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written);
@@ -3818,7 +5015,6 @@ SP_IMP void sp_fmon_os_push_file(sp_fmon_os_t* os, sp_str_t file);
 SP_IMP void sp_os_signal_from_native(s32 sig);
 SP_IMP s32  sp_os_signal_to_native(sp_os_signal_t signal);
 #if defined(SP_WIN32)
-SP_IMP void        sp_os_win32_write(DWORD handle_id, sp_str_t message);
 SP_IMP BOOL WINAPI sp_os_signal_console_ctrl(DWORD type);
 #endif
 
@@ -3826,9 +5022,6 @@ SP_IMP BOOL WINAPI sp_os_signal_console_ctrl(DWORD type);
 #if defined(SP_POSIX)
 SP_IMP sp_env_t           sp_ps_build_env(sp_ps_env_config_t* config, sp_mem_t mem);
 SP_IMP bool               sp_ps_is_fd_valid(sp_sys_fd_t fd);
-SP_IMP bool               sp_ps_create_pipes(s32 pipes [2]);
-SP_IMP void               sp_ps_set_nonblocking(s32 fd);
-SP_IMP void               sp_ps_set_blocking(s32 fd);
 SP_IMP void               sp_ps_set_cwd(posix_spawn_file_actions_t* fa, sp_str_t cwd);
 SP_IMP sp_io_close_mode_t sp_ps_io_close_mode(sp_ps_io_mode_t mode);
 SP_IMP void*              sp_posix_thread_launch(void* args);
@@ -3839,19 +5032,288 @@ SP_IMP c8*               sp_ps_build_windows_cmdline(sp_mem_t mem, sp_ps_config_
 SP_IMP sp_win32_handle_t sp_ps_win32_open_null(sp_win32_dword_t access);
 SP_IMP sp_win32_handle_t sp_ps_win32_fd_to_handle(sp_sys_fd_t fd);
 SP_IMP sp_ps_status_t    sp_ps_win32_finish_process(sp_ps_t* ps);
-SP_IMP u64               sp_ps_win32_read_available(sp_sys_fd_t fd, sp_io_writer_t* builder, bool* open);
 SP_IMP DWORD WINAPI      sp_win32_thread_launch(LPVOID args);
 #endif
 
 // @sys
 #if defined(SP_LINUX)
-// This is ripped directly from musl. The only things of note here are:
-// - We set errno the same way they do, even though we only use it for EINTR and I'm not totally sure whether
-//   we ought to be using it for that. Point being, though, we set errno on every syscall error
-// - The u64 cast in sp_syscall() is just for sign conversion warnings
+// We vendor any constant we use on Linux to make freestanding compilation as simple as
+// possible. We also vendor types, for the same reason. Since our Linux backend never calls
+// libc, there is no possibility of a mismatch between a vendored struct and a libc struct.
+//
+// In cases where a piece of code only uses libc functions that are trivial wrappers over
+// syscalls (e.g. ioctl), we'll do something like this:
+//
+// #if defined(SP_LINUX)
+//   typedef sp_sys_termios_t sp_termios_t;
+// #else
+//   typedef struct termios sp_termios_t;
+// #endif
+//
+// Which lets us (a) reuse the code that needs struct termios, identically (b) without
+// needing to include termios.h on Linux, but also (c) not risking a struct mismatch
+// when we're using libc.
+//
+// This kind of trick, and any similar sp_sys_* struct, gets defined in the implementation
+// section to avoid polluting every TU that doesn't define the implementation. If
+// something's in the header section but not part of the public API, it's probably a
+// mistake
+
+/////////////////////
+// SYSCALL NUMBERS //
+/////////////////////
+
+#if defined(SP_AMD64)
+  #define SP_SYSCALL_NUM_READ              0
+  #define SP_SYSCALL_NUM_WRITE             1
+  #define SP_SYSCALL_NUM_PREAD64           17
+  #define SP_SYSCALL_NUM_PWRITE64          18
+  #define SP_SYSCALL_NUM_OPEN              2
+  #define SP_SYSCALL_NUM_CLOSE             3
+  #define SP_SYSCALL_NUM_STAT              4
+  #define SP_SYSCALL_NUM_FSTAT             5
+  #define SP_SYSCALL_NUM_LSTAT             6
+  #define SP_SYSCALL_NUM_POLL              7
+  #define SP_SYSCALL_NUM_LSEEK             8
+  #define SP_SYSCALL_NUM_MMAP              9
+  #define SP_SYSCALL_NUM_MUNMAP            11
+  #define SP_SYSCALL_NUM_SIGACTION         13
+  #define SP_SYSCALL_NUM_IOCTL             16
+  #define SP_SYSCALL_NUM_MREMAP            25
+  #define SP_SYSCALL_NUM_DUP2              33
+  #define SP_SYSCALL_NUM_NANOSLEEP         35
+  #define SP_SYSCALL_NUM_GETPID            39
+  #define SP_SYSCALL_NUM_SENDFILE          40
+  #define SP_SYSCALL_NUM_SOCKET            41
+  #define SP_SYSCALL_NUM_CONNECT           42
+  #define SP_SYSCALL_NUM_SENDTO            44
+  #define SP_SYSCALL_NUM_RECVFROM          45
+  #define SP_SYSCALL_NUM_BIND              49
+  #define SP_SYSCALL_NUM_LISTEN            50
+  #define SP_SYSCALL_NUM_GETSOCKNAME       51
+  #define SP_SYSCALL_NUM_SOCKETPAIR        53
+  #define SP_SYSCALL_NUM_SETSOCKOPT        54
+  #define SP_SYSCALL_NUM_GETSOCKOPT        55
+  #define SP_SYSCALL_NUM_ACCEPT4           288
+  #define SP_SYSCALL_NUM_EVENTFD2          290
+  #define SP_SYSCALL_NUM_COPY_FILE_RANGE   326
+  #define SP_SYSCALL_NUM_CLONE             56
+  #define SP_SYSCALL_NUM_FORK              57
+  #define SP_SYSCALL_NUM_EXECVE            59
+  #define SP_SYSCALL_NUM_EXIT              60
+  #define SP_SYSCALL_NUM_WAIT4             61
+  #define SP_SYSCALL_NUM_KILL              62
+  #define SP_SYSCALL_NUM_FCNTL             72
+  #define SP_SYSCALL_NUM_GETCWD            79
+  #define SP_SYSCALL_NUM_CHDIR             80
+  #define SP_SYSCALL_NUM_RENAME            82
+  #define SP_SYSCALL_NUM_MKDIR             83
+  #define SP_SYSCALL_NUM_RMDIR             84
+  #define SP_SYSCALL_NUM_LINK              86
+  #define SP_SYSCALL_NUM_UNLINK            87
+  #define SP_SYSCALL_NUM_SYMLINK           88
+  #define SP_SYSCALL_NUM_READLINK          89
+  #define SP_SYSCALL_NUM_CHMOD             90
+  #define SP_SYSCALL_NUM_FCHMOD            91
+  #define SP_SYSCALL_NUM_ARCH_PRCTL        158
+  #define SP_SYSCALL_NUM_GETTID            186
+  #define SP_SYSCALL_NUM_FUTEX             202
+  #define SP_SYSCALL_NUM_SCHED_GETAFFINITY 204
+  #define SP_SYSCALL_NUM_GETDENTS64        217
+  #define SP_SYSCALL_NUM_CLOCK_GETTIME     228
+  #define SP_SYSCALL_NUM_CLOCK_NANOSLEEP   230
+  #define SP_SYSCALL_NUM_EXIT_GROUP        231
+  #define SP_SYSCALL_NUM_INOTIFY_ADD_WATCH 254
+  #define SP_SYSCALL_NUM_INOTIFY_RM_WATCH  255
+  #define SP_SYSCALL_NUM_OPENAT            257
+  #define SP_SYSCALL_NUM_MKDIRAT           258
+  #define SP_SYSCALL_NUM_NEWFSTATAT        262
+  #define SP_SYSCALL_NUM_UNLINKAT          263
+  #define SP_SYSCALL_NUM_RENAMEAT          264
+  #define SP_SYSCALL_NUM_LINKAT            265
+  #define SP_SYSCALL_NUM_SYMLINKAT         266
+  #define SP_SYSCALL_NUM_READLINKAT        267
+  #define SP_SYSCALL_NUM_FCHMODAT          268
+  #define SP_SYSCALL_NUM_PPOLL             271
+  #define SP_SYSCALL_NUM_DUP3              292
+  #define SP_SYSCALL_NUM_PIPE2             293
+  #define SP_SYSCALL_NUM_INOTIFY_INIT1     294
+  #define SP_SYSCALL_NUM_PERF_EVENT_OPEN   298
+  #define SP_SYSCALL_NUM_STATX             332
+
+#elif defined(SP_ARM64)
+  #define SP_SYSCALL_NUM_GETCWD            17
+  #define SP_SYSCALL_NUM_EVENTFD2          19
+  #define SP_SYSCALL_NUM_DUP3              24
+  #define SP_SYSCALL_NUM_FCNTL             25
+  #define SP_SYSCALL_NUM_INOTIFY_INIT1     26
+  #define SP_SYSCALL_NUM_INOTIFY_ADD_WATCH 27
+  #define SP_SYSCALL_NUM_INOTIFY_RM_WATCH  28
+  #define SP_SYSCALL_NUM_IOCTL             29
+  #define SP_SYSCALL_NUM_MKDIRAT           34
+  #define SP_SYSCALL_NUM_UNLINKAT          35
+  #define SP_SYSCALL_NUM_SYMLINKAT         36
+  #define SP_SYSCALL_NUM_LINKAT            37
+  #define SP_SYSCALL_NUM_RENAMEAT          38
+  #define SP_SYSCALL_NUM_CHDIR             49
+  #define SP_SYSCALL_NUM_FCHMOD            52
+  #define SP_SYSCALL_NUM_FCHMODAT          53
+  #define SP_SYSCALL_NUM_OPENAT            56
+  #define SP_SYSCALL_NUM_CLOSE             57
+  #define SP_SYSCALL_NUM_PIPE2             59
+  #define SP_SYSCALL_NUM_GETDENTS64        61
+  #define SP_SYSCALL_NUM_LSEEK             62
+  #define SP_SYSCALL_NUM_READ              63
+  #define SP_SYSCALL_NUM_WRITE             64
+  #define SP_SYSCALL_NUM_PREAD64           67
+  #define SP_SYSCALL_NUM_PWRITE64          68
+  #define SP_SYSCALL_NUM_PPOLL             73
+  #define SP_SYSCALL_NUM_READLINKAT        78
+  #define SP_SYSCALL_NUM_NEWFSTATAT        79
+  #define SP_SYSCALL_NUM_FSTAT             80
+  #define SP_SYSCALL_NUM_EXIT              93
+  #define SP_SYSCALL_NUM_EXIT_GROUP        94
+  #define SP_SYSCALL_NUM_FUTEX             98
+  #define SP_SYSCALL_NUM_NANOSLEEP         101
+  #define SP_SYSCALL_NUM_CLOCK_GETTIME     113
+  #define SP_SYSCALL_NUM_CLOCK_NANOSLEEP   115
+  #define SP_SYSCALL_NUM_SCHED_GETAFFINITY 123
+  #define SP_SYSCALL_NUM_KILL              129
+  #define SP_SYSCALL_NUM_SIGACTION         134
+  #define SP_SYSCALL_NUM_GETPID            172
+  #define SP_SYSCALL_NUM_GETTID            178
+  #define SP_SYSCALL_NUM_MUNMAP            215
+  #define SP_SYSCALL_NUM_MREMAP            216
+  #define SP_SYSCALL_NUM_CLONE             220
+  #define SP_SYSCALL_NUM_EXECVE            221
+  #define SP_SYSCALL_NUM_MMAP              222
+  #define SP_SYSCALL_NUM_PERF_EVENT_OPEN   241
+  #define SP_SYSCALL_NUM_WAIT4             260
+  #define SP_SYSCALL_NUM_SENDFILE          71
+  #define SP_SYSCALL_NUM_SOCKET            198
+  #define SP_SYSCALL_NUM_SOCKETPAIR        199
+  #define SP_SYSCALL_NUM_BIND              200
+  #define SP_SYSCALL_NUM_LISTEN            201
+  #define SP_SYSCALL_NUM_CONNECT           203
+  #define SP_SYSCALL_NUM_GETSOCKNAME       204
+  #define SP_SYSCALL_NUM_SENDTO            206
+  #define SP_SYSCALL_NUM_RECVFROM          207
+  #define SP_SYSCALL_NUM_SETSOCKOPT        208
+  #define SP_SYSCALL_NUM_GETSOCKOPT        209
+  #define SP_SYSCALL_NUM_ACCEPT4           242
+  #define SP_SYSCALL_NUM_COPY_FILE_RANGE   285
+  #define SP_SYSCALL_NUM_STATX             291
+  #define SP_SYSCALL_NUM_OPEN              SP_SYSCALL_NUM_OPENAT
+  #define SP_SYSCALL_NUM_STAT              SP_SYSCALL_NUM_NEWFSTATAT
+  #define SP_SYSCALL_NUM_LSTAT             SP_SYSCALL_NUM_NEWFSTATAT
+  #define SP_SYSCALL_NUM_MKDIR             SP_SYSCALL_NUM_MKDIRAT
+  #define SP_SYSCALL_NUM_RMDIR             SP_SYSCALL_NUM_UNLINKAT
+  #define SP_SYSCALL_NUM_UNLINK            SP_SYSCALL_NUM_UNLINKAT
+  #define SP_SYSCALL_NUM_RENAME            SP_SYSCALL_NUM_RENAMEAT
+  #define SP_SYSCALL_NUM_READLINK          SP_SYSCALL_NUM_READLINKAT
+  #define SP_SYSCALL_NUM_CHMOD             SP_SYSCALL_NUM_FCHMODAT
+  #define SP_SYSCALL_NUM_FORK              SP_SYSCALL_NUM_CLONE
+  #define SP_SYSCALL_NUM_DUP2              SP_SYSCALL_NUM_DUP3
+  #define SP_SYSCALL_NUM_SYMLINK           SP_SYSCALL_NUM_SYMLINKAT
+  #define SP_SYSCALL_NUM_LINK              SP_SYSCALL_NUM_LINKAT
+#endif
+
+#define SP_SYS_LINUX_O_RDONLY   0
+#define SP_SYS_LINUX_O_WRONLY   1
+#define SP_SYS_LINUX_O_RDWR     2
+#define SP_SYS_LINUX_O_CREAT    0100
+#define SP_SYS_LINUX_O_EXCL     0200
+#define SP_SYS_LINUX_O_TRUNC    01000
+#define SP_SYS_LINUX_O_APPEND   02000
+#define SP_SYS_LINUX_O_NONBLOCK 04000
+#define SP_SYS_LINUX_O_CLOEXEC  02000000
+#define SP_SYS_LINUX_O_PATH     010000000
+#if defined(SP_AMD64)
+  #define SP_SYS_LINUX_O_DIRECTORY 0200000
+#elif defined(SP_ARM64)
+  #define SP_SYS_LINUX_O_DIRECTORY 040000
+#endif
+
+#define SP_SYS_LINUX_STATX_BASIC_STATS 0x7ff
+#define SP_SYS_LINUX_STATX_BTIME       0x800
+
+#define SP_SYS_LINUX_FUTEX_WAIT         0
+#define SP_SYS_LINUX_FUTEX_WAKE         1
+#define SP_SYS_LINUX_FUTEX_PRIVATE_FLAG 128
+
+#define SP_SYS_LINUX_POLLIN   0x0001
+#define SP_SYS_LINUX_POLLOUT  0x0004
+#define SP_SYS_LINUX_POLLERR  0x0008
+#define SP_SYS_LINUX_POLLHUP  0x0010
+#define SP_SYS_LINUX_POLLNVAL 0x0020
+
+#define SP_SYS_LINUX_MSG_NOSIGNAL 0x4000
+
+///////////
+// TYPES //
+///////////
+typedef struct {
+  s32 wd;
+  u32 mask;
+  u32 cookie;
+  u32 len;
+  c8  name[];
+} sp_sys_inotify_event_t;
+
+typedef struct {
+  u64 d_ino;
+  s64 d_off;
+  u16 d_reclen;
+  u8  d_type;
+  c8  d_name[];
+} sp_sys_dirent64_t;
+
+typedef struct {
+  s32 fd;
+  s16 events;
+  s16 revents;
+} sp_sys_linux_pollfd_t;
+
+typedef struct {
+  u16 ws_row;
+  u16 ws_col;
+  u16 ws_xpixel;
+  u16 ws_ypixel;
+} sp_sys_winsize_t;
+
+typedef struct {
+  u32 c_iflag;
+  u32 c_oflag;
+  u32 c_cflag;
+  u32 c_lflag;
+  u8  c_cc[20];
+  u32 _c_ispeed;
+  u32 _c_ospeed;
+} sp_sys_termios_t;
+
+typedef struct {
+  u16 family;
+  u8  port [2];
+  u8  addr [4];
+  u8  zero [8];
+} sp_sys_linux_sockaddr_in_t;
+
+#define SP_SYS_LINUX_AF_INET       2
+#define SP_SYS_LINUX_SOCK_STREAM   1
+#define SP_SYS_LINUX_SOCK_NONBLOCK 04000
+#define SP_SYS_LINUX_SOCK_CLOEXEC  02000000
+#define SP_SYS_LINUX_SOL_SOCKET    1
+#define SP_SYS_LINUX_SO_REUSEADDR  2
+#define SP_SYS_LINUX_SO_ERROR     4
+
+//////////////////////
+// SYSCALL WRAPPERS //
+//////////////////////
+// Mostly ripped from musl, with a few convenience macros of our own
 #define __scc(X) ((s64) (X))
 
-s64 __sp_syscall_ret(u64);
+s64 __sp_syscall_ret_r(u64);
+sp_err_t __sp_syscall_ret_e(u64);
 s64 __sp_syscall_cp(s64, s64, s64, s64, s64, s64, s64);
 s64 sp_syscall0(s64 n);
 s64 sp_syscall1(s64 n, s64 a1);
@@ -3860,6 +5322,12 @@ s64 sp_syscall3(s64 n, s64 a1, s64 a2, s64 a3);
 s64 sp_syscall4(s64 n, s64 a1, s64 a2, s64 a3, s64 a4);
 s64 sp_syscall5(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5);
 s64 sp_syscall6(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6);
+s64 sp_syscall_retry1(s64 n, s64 a1);
+s64 sp_syscall_retry2(s64 n, s64 a1, s64 a2);
+s64 sp_syscall_retry3(s64 n, s64 a1, s64 a2, s64 a3);
+s64 sp_syscall_retry4(s64 n, s64 a1, s64 a2, s64 a3, s64 a4);
+s64 sp_syscall_retry5(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5);
+s64 sp_syscall_retry6(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6);
 
 #define __sp_syscall1(n,a) sp_syscall1(n,__scc(a))
 #define __sp_syscall2(n,a,b) sp_syscall2(n,__scc(a),__scc(b))
@@ -3869,6 +5337,13 @@ s64 sp_syscall6(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6);
 #define __sp_syscall6(n,a,b,c,d,e,f) sp_syscall6(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),__scc(f))
 #define __sp_syscall7(n,a,b,c,d,e,f,g) sp_syscall7(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),__scc(f),__scc(g))
 
+#define __sp_syscall_retry1(n,a) sp_syscall_retry1(n,__scc(a))
+#define __sp_syscall_retry2(n,a,b) sp_syscall_retry2(n,__scc(a),__scc(b))
+#define __sp_syscall_retry3(n,a,b,c) sp_syscall_retry3(n,__scc(a),__scc(b),__scc(c))
+#define __sp_syscall_retry4(n,a,b,c,d) sp_syscall_retry4(n,__scc(a),__scc(b),__scc(c),__scc(d))
+#define __sp_syscall_retry5(n,a,b,c,d,e) sp_syscall_retry5(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e))
+#define __sp_syscall_retry6(n,a,b,c,d,e,f) sp_syscall_retry6(n,__scc(a),__scc(b),__scc(c),__scc(d),__scc(e),__scc(f))
+
 #define __SP_SYSCALL_NARGS_X(a,b,c,d,e,f,g,h,n,...) n
 #define __SP_SYSCALL_NARGS(...) __SP_SYSCALL_NARGS_X(__VA_ARGS__,7,6,5,4,3,2,1,0,)
 #define __SP_SYSCALL_CONCAT_X(a,b) a##b
@@ -3876,28 +5351,180 @@ s64 sp_syscall6(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6);
 #define __SP_SYSCALL_DISP(b,...) __SP_SYSCALL_CONCAT(b,__SP_SYSCALL_NARGS(__VA_ARGS__))(__VA_ARGS__)
 
 #define __sp_syscall(...) __SP_SYSCALL_DISP(__sp_syscall,__VA_ARGS__)
-#define sp_syscall(...) __sp_syscall_ret((u64)__sp_syscall(__VA_ARGS__))
+#define sp_syscall(...) __sp_syscall(__VA_ARGS__)
+#define sp_syscall_r(...) __sp_syscall_ret_r((u64)__sp_syscall(__VA_ARGS__))
+#define sp_syscall_e(...) __sp_syscall_ret_e((u64)__sp_syscall(__VA_ARGS__))
+#define sp_syscall_retry(...) __SP_SYSCALL_DISP(__sp_syscall_retry,__VA_ARGS__)
 
-// Typed wrappers for individual syscalls
 SP_IMP s32 sp_syscall_notify_init1(s32 flags);
 SP_IMP s32 sp_syscall_inotify_add_watch(s32 fd, const c8* pathname, u32 mask);
 SP_IMP s32 sp_syscall_wait4(s32 pid, s32* status, s32 options, void* rusage);
 SP_IMP s64 sp_lx_getdents64(s32 fd, void* buf, u64 count);
-
 #endif
 
 #if defined(SP_WIN32)
-SP_IMP void     sp_nt_load(void);
-SP_IMP u8*      sp_nt_peb_base(void);
-SP_IMP void*    sp_nt_process_heap(void);
-SP_IMP u8*      sp_nt_process_params(void);
-SP_IMP u32      sp_sys_nt_disposition_from_flags(s32 flags);
-SP_IMP void*    sp_sys_nt_open(sp_sys_fd_t root, sp_str_t utf8, u32 access, u32 share, u32 disposition, u32 options, u32 file_attr);
-SP_IMP u32      sp_sys_nt_access_from_flags(s32 flags);
+SP_PRIVATE void sp_rt_init(void);
+
+#define SP_NT(fn) ((SP_UNLIKELY(!sp_rt.nt.fn) ? sp_tls_once(&sp_rt.tls.once, sp_rt_init) : (void)0), sp_rt.nt.fn)
+
+#define SP_NT_FILE_OPEN         0x00000001
+#define SP_NT_FILE_CREATE       0x00000002
+#define SP_NT_FILE_OPEN_IF      0x00000003
+#define SP_NT_FILE_OVERWRITE    0x00000004
+#define SP_NT_FILE_OVERWRITE_IF 0x00000005
+
+#define SP_NT_FILE_DIRECTORY_FILE              0x00000001
+#define SP_NT_FILE_SYNCHRONOUS_IO_NONALERT     0x00000020
+#define SP_NT_FILE_NON_DIRECTORY_FILE          0x00000040
+#define SP_NT_FILE_OPEN_FOR_BACKUP_INTENT      0x00004000
+#define SP_NT_FILE_OPEN_REPARSE_POINT          0x00200000
+
+#define SP_NT_FILE_PIPE_BYTE_STREAM_TYPE       0x00000000
+#define SP_NT_FILE_PIPE_BYTE_STREAM_MODE       0x00000000
+#define SP_NT_FILE_PIPE_QUEUE_OPERATION        0x00000000
+
+#define SP_NT_STATUS_OBJECT_NAME_COLLISION ((sp_nt_status_t)0xC0000035)
+#define SP_NT_STATUS_OBJECT_NAME_NOT_FOUND ((sp_nt_status_t)0xC0000034)
+#define SP_NT_STATUS_OBJECT_PATH_NOT_FOUND ((sp_nt_status_t)0xC000003A)
+#define SP_NT_STATUS_ACCESS_DENIED         ((sp_nt_status_t)0xC0000022)
+#define SP_NT_STATUS_INVALID_INFO_CLASS    ((sp_nt_status_t)0xC0000003)
+#define SP_NT_STATUS_INVALID_PARAMETER     ((sp_nt_status_t)0xC000000D)
+#define SP_NT_STATUS_NOT_SUPPORTED         ((sp_nt_status_t)0xC00000BB)
+#define SP_NT_STATUS_NO_MEMORY             ((sp_nt_status_t)0xC0000017)
+#define SP_NT_STATUS_OBJECT_PATH_SYNTAX_BAD ((sp_nt_status_t)0xC000003B)
+#define SP_NT_STATUS_SHARING_VIOLATION     ((sp_nt_status_t)0xC0000043)
+#define SP_NT_STATUS_DELETE_PENDING        ((sp_nt_status_t)0xC0000056)
+#define SP_NT_STATUS_DISK_FULL             ((sp_nt_status_t)0xC000007F)
+#define SP_NT_STATUS_INSUFFICIENT_RESOURCES ((sp_nt_status_t)0xC000009A)
+#define SP_NT_STATUS_MEDIA_WRITE_PROTECTED ((sp_nt_status_t)0xC00000A2)
+#define SP_NT_STATUS_FILE_IS_A_DIRECTORY   ((sp_nt_status_t)0xC00000BA)
+#define SP_NT_STATUS_NOT_A_DIRECTORY       ((sp_nt_status_t)0xC0000103)
+#define SP_NT_STATUS_CANNOT_DELETE         ((sp_nt_status_t)0xC0000121)
+#define SP_NT_STATUS_DIRECTORY_NOT_EMPTY   ((sp_nt_status_t)0xC0000101)
+#define SP_NT_STATUS_TOO_MANY_OPENED_FILES ((sp_nt_status_t)0xC000011F)
+#define SP_NT_STATUS_INVALID_HANDLE        ((sp_nt_status_t)0xC0000008)
+#define SP_NT_STATUS_NOT_SAME_DEVICE       ((sp_nt_status_t)0xC00000D4)
+#define SP_NT_STATUS_INVALID_DEVICE_REQUEST ((sp_nt_status_t)0xC0000010)
+#define SP_NT_STATUS_NO_SUCH_FILE          ((sp_nt_status_t)0xC000000F)
+#define SP_NT_STATUS_NO_MORE_FILES         ((sp_nt_status_t)0x80000006)
+#define SP_NT_STATUS_PENDING               ((sp_nt_status_t)0x00000103)
+#define SP_NT_STATUS_END_OF_FILE           ((sp_nt_status_t)0xC0000011)
+#define SP_NT_STATUS_PIPE_CLOSING          ((sp_nt_status_t)0xC00000B1)
+#define SP_NT_STATUS_PIPE_BROKEN           ((sp_nt_status_t)0xC000014B)
+
+#define SP_NT_FILE_DIRECTORY_INFORMATION  1
+#define SP_NT_FILE_BASIC_INFORMATION      4
+#define SP_NT_FILE_RENAME_INFORMATION    10
+#define SP_NT_FILE_DISPOSITION_INFORMATION 13
+#define SP_NT_FILE_POSITION_INFORMATION  14
+#define SP_NT_FILE_LINK_INFORMATION      11
+#define SP_NT_FILE_DISPOSITION_INFORMATION_EX 64
+#define SP_NT_FILE_RENAME_INFORMATION_EX      65
+
+#define SP_NT_FILE_FS_DEVICE_INFORMATION 4
+
+#define SP_NT_FILE_DEVICE_CD_ROM              0x00000002
+#define SP_NT_FILE_DEVICE_DISK                0x00000007
+
+#define SP_NT_FILE_DISPOSITION_DELETE                    0x00000001
+#define SP_NT_FILE_DISPOSITION_POSIX_SEMANTICS           0x00000002
+#define SP_NT_FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE 0x00000010
+
+#define SP_NT_FILE_RENAME_REPLACE_IF_EXISTS         0x00000001
+#define SP_NT_FILE_RENAME_POSIX_SEMANTICS           0x00000002
+#define SP_NT_FILE_RENAME_IGNORE_READONLY_ATTRIBUTE 0x00000040
+
+#define SP_NT_FSCTL_SET_REPARSE_POINT 0x000900A4
+#define SP_NT_IO_REPARSE_TAG_SYMLINK  0xA000000C
+#define SP_NT_SYMLINK_FLAG_RELATIVE   0x00000001
+#define SP_NT_MAX_REPARSE_DATA        16384
+
+#define SP_NT_OBJECT_NAME_INFORMATION 1
+#define SP_NT_NO_OPTIONS 0
+
+typedef struct {
+  s64 CreationTime;
+  s64 LastAccessTime;
+  s64 LastWriteTime;
+  s64 ChangeTime;
+  u32 FileAttributes;
+  u32 Reserved;
+} sp_nt_file_basic_information_t;
+
+typedef struct {
+  s64 CurrentByteOffset;
+} sp_nt_file_position_information_t;
+
+typedef struct {
+  u32 DeviceType;
+  u32 Characteristics;
+} sp_nt_file_fs_device_information_t;
+
+typedef struct {
+  u32 NextEntryOffset;
+  u32 FileIndex;
+  s64 CreationTime;
+  s64 LastAccessTime;
+  s64 LastWriteTime;
+  s64 ChangeTime;
+  s64 EndOfFile;
+  s64 AllocationSize;
+  u32 FileAttributes;
+  u32 FileNameLength;
+  u16 FileName [1];
+} sp_nt_file_directory_information_t;
+
+typedef struct {
+  u8 DeleteFile;
+} sp_nt_file_disposition_information_t;
+
+typedef struct {
+  u32 Flags;
+} sp_nt_file_disposition_information_ex_t;
+
+typedef struct {
+  u32 ReparseTag;
+  u16 ReparseDataLength;
+  u16 Reserved;
+  u16 SubstituteNameOffset;
+  u16 SubstituteNameLength;
+  u16 PrintNameOffset;
+  u16 PrintNameLength;
+  u32 Flags;
+} sp_nt_symlink_reparse_buffer_t;
+
+
+
+typedef struct {
+  union {
+    u8 ReplaceIfExists;
+    u32 Flags;
+  };
+  u8 _pad[4];
+  void* RootDirectory;
+  u32 FileNameLength;
+  u16 FileName[1];
+} sp_nt_file_rename_information_t;
+
+typedef sp_nt_file_rename_information_t sp_nt_file_link_information_t;
+
+SP_IMP void sp_nt_load(void);
+SP_IMP u8* sp_nt_peb_base(void);
+SP_IMP u8* sp_nt_process_params(void);
 SP_IMP sp_str_t sp_win32_utf16_to_utf8(const u16* utf16, s32 len);
-SP_IMP u32      sp_win32_utf16_len(const u16* str);
-SP_IMP bool     sp_win32_utf16_equals_cstr(const u16* a, u32 a_len, const c8* b, u32 b_len);
-SP_IMP void     sp_win32_env_it_set_current(sp_os_env_it_t* it);
+SP_IMP u32 sp_win32_utf16_len(const u16* str);
+SP_IMP bool sp_win32_utf16_equals_cstr(const u16* a, u32 a_len, const c8* b, u32 b_len);
+SP_IMP void sp_win32_env_it_set_current(sp_os_env_it_t* it);
+SP_IMP sp_nt_status_t sp_sys_nt_open(sp_sys_fd_t root, sp_str_t utf8, u32 access, u32 share, u32 disposition, u32 options, u32 file_attr, sp_sys_fd_t* out);
+SP_IMP sp_nt_status_t sp_sys_nt_close(sp_sys_fd_t fd);
+#endif
+#if defined(SP_MACOS)
+#define SP_SYS_ULOCK_COMPARE_AND_WAIT 0x00000001u
+#define SP_SYS_ULOCK_WAKE_ALL         0x00000100u
+#define SP_SYS_ULOCK_NO_ERRNO         0x01000000u
+
+extern s32 __ulock_wait2(u32 operation, void* addr, u64 value, u64 timeout_ns, u64 value2);
+extern s32 __ulock_wake(u32 operation, void* addr, u64 wake_value);
 #endif
 #if defined(SP_FREESTANDING)
 SP_IMP void* sp_sys_get_tp(void);
@@ -3928,11 +5555,477 @@ SP_END_EXTERN_C()
 
 SP_BEGIN_EXTERN_C()
 
-sp_rt_t sp_rt;
+const sp_sys_vtable_t sp_sys_vtable_platform = {
+  .read                   = sp_sys_read_p,
+  .write                  = sp_sys_write_p,
+  .pread                  = sp_sys_pread_p,
+  .pwrite                 = sp_sys_pwrite_p,
+  .transfer               = sp_sys_transfer_p,
+  .transfer_positional    = sp_sys_transfer_positional_p,
+  .get_root               = sp_sys_get_root_p,
+  .get_exe_path           = sp_sys_get_exe_path_p,
+  .get_cwd_path           = sp_sys_get_cwd_path_p,
+  .get_storage_path       = sp_sys_get_storage_path_p,
+  .get_config_path        = sp_sys_get_config_path_p,
+  .open                   = sp_sys_open_p,
+  .open_dir               = sp_sys_open_dir_p,
+  .close                  = sp_sys_close_p,
+  .pipe                   = sp_sys_pipe_p,
+  .pipe_ready             = sp_sys_pipe_ready_p,
+  .mkdir                  = sp_sys_mkdir_p,
+  .rmdir                  = sp_sys_rmdir_p,
+  .unlink                 = sp_sys_unlink_p,
+  .rename                 = sp_sys_rename_p,
+  .link                   = sp_sys_link_p,
+  .symlink                = sp_sys_symlink_p,
+  .get_path_metadata      = sp_sys_get_path_metadata_p,
+  .get_link_metadata      = sp_sys_get_link_metadata_p,
+  .get_file_metadata      = sp_sys_get_file_metadata_p,
+  .chmod                  = sp_sys_chmod_p,
+  .clock_gettime          = sp_sys_clock_gettime_p,
+  .nanosleep              = sp_sys_nanosleep_p,
+  .futex_wait             = sp_sys_futex_wait_p,
+  .futex_wake             = sp_sys_futex_wake_p,
+  .futex_wake_all         = sp_sys_futex_wake_all_p,
+  .canonicalize_path      = sp_sys_canonicalize_path_p,
+  .event_open             = sp_sys_event_open_p,
+  .event_signal           = sp_sys_event_signal_p,
+  .event_clear            = sp_sys_event_clear_p,
+  .wait                   = sp_sys_wait_p,
+  .tty_get                = sp_sys_tty_get_p,
+  .tty_set                = sp_sys_tty_set_p,
+  .tty_size               = sp_sys_tty_size_p,
+  .is_tty                 = sp_sys_is_tty_p,
+  .tty_ready              = sp_sys_tty_ready_p,
+  .tty_mode_apply         = sp_sys_tty_mode_apply_p,
+  .tty_use_vt             = sp_sys_tty_use_vt_p,
+  .socket_open            = sp_sys_socket_open_p,
+  .socket_bind            = sp_sys_socket_bind_p,
+  .socket_listen          = sp_sys_socket_listen_p,
+  .socket_connect         = sp_sys_socket_connect_p,
+  .socket_error           = sp_sys_socket_error_p,
+  .socket_accept          = sp_sys_socket_accept_p,
+  .socket_close           = sp_sys_socket_close_p,
+  .socket_recv            = sp_sys_socket_recv_p,
+  .socket_send            = sp_sys_socket_send_p,
+  .socket_wait            = sp_sys_socket_wait_p,
+  .socket_set_nonblocking = sp_sys_socket_set_nonblocking_p,
+  .socket_reuse_addr      = sp_sys_socket_reuse_addr_p,
+  .socket_local_port      = sp_sys_socket_local_port_p,
+  .alloc                  = sp_sys_alloc_p,
+  .free                   = sp_sys_free_p,
+  .memcpy                 = sp_sys_memcpy_p,
+  .memmove                = sp_sys_memmove_p,
+  .memset                 = sp_sys_memset_p,
+  .memcmp                 = sp_sys_memcmp_p,
+  .assert                 = sp_sys_assert_p,
+  .exit                   = sp_sys_exit_p,
+  .env                    = sp_sys_env_p,
+  .lseek                  = sp_sys_lseek_p,
+  .chdir                  = sp_sys_chdir_p,
+  .dir_from_fd            = sp_sys_dir_from_fd_p,
+  .dir_read               = sp_sys_dir_read_p,
+  .dir_parse              = sp_sys_dir_parse_p,
+  .dir_close              = sp_sys_dir_close_p,
+};
+
+sp_rt_t sp_rt = {
+  .vt = &sp_sys_vtable_platform,
+  .err_str = sp_err_str,
+};
+
+sp_str_t sp_err_str(sp_err_t err) {
+  switch (err) {
+    case SP_OK:                              return sp_str_lit("SP_OK");
+    case SP_ERR:                             return sp_str_lit("SP_ERR");
+    case SP_ERR_IO:                          return sp_str_lit("SP_ERR_IO");
+    case SP_ERR_IO_SEEK_INVALID:             return sp_str_lit("SP_ERR_IO_SEEK_INVALID");
+    case SP_ERR_IO_NO_SPACE:                 return sp_str_lit("SP_ERR_IO_NO_SPACE");
+    case SP_ERR_IO_EOF:                      return sp_str_lit("SP_ERR_IO_EOF");
+    case SP_ERR_IO_TIMEOUT:                  return sp_str_lit("SP_ERR_IO_TIMEOUT");
+    case SP_ERR_FMT_UNKNOWN_DIRECTIVE:       return sp_str_lit("SP_ERR_FMT_UNKNOWN_DIRECTIVE");
+    case SP_ERR_FMT_BAD_DIRECTIVE:           return sp_str_lit("SP_ERR_FMT_BAD_DIRECTIVE");
+    case SP_ERR_FMT_TOO_MANY_DIRECTIVES:     return sp_str_lit("SP_ERR_FMT_TOO_MANY_DIRECTIVES");
+    case SP_ERR_FMT_BAD_PRECISION:           return sp_str_lit("SP_ERR_FMT_BAD_PRECISION");
+    case SP_ERR_FMT_BAD_PLACEHOLDER:         return sp_str_lit("SP_ERR_FMT_BAD_PLACEHOLDER");
+    case SP_ERR_FMT_UNTERMINATED_PLACEHOLDER: return sp_str_lit("SP_ERR_FMT_UNTERMINATED_PLACEHOLDER");
+    case SP_ERR_FMT_BAD_ARG:                 return sp_str_lit("SP_ERR_FMT_BAD_ARG");
+    case SP_ERR_FMT_WRONG_FILL_KIND:         return sp_str_lit("SP_ERR_FMT_WRONG_FILL_KIND");
+    case SP_ERR_FMT_WRONG_WIDTH_KIND:        return sp_str_lit("SP_ERR_FMT_WRONG_WIDTH_KIND");
+    case SP_ERR_FMT_WRONG_PRECISION_KIND:    return sp_str_lit("SP_ERR_FMT_WRONG_PRECISION_KIND");
+    case SP_ERR_FMT_WRONG_STYLE_KIND:        return sp_str_lit("SP_ERR_FMT_WRONG_STYLE_KIND");
+    case SP_ERR_SYS:                         return sp_str_lit("SP_ERR_SYS");
+    case SP_ERR_SYS_NOT_FOUND:               return sp_str_lit("SP_ERR_SYS_NOT_FOUND");
+    case SP_ERR_SYS_ACCESS_DENIED:           return sp_str_lit("SP_ERR_SYS_ACCESS_DENIED");
+    case SP_ERR_SYS_EXISTS:                  return sp_str_lit("SP_ERR_SYS_EXISTS");
+    case SP_ERR_SYS_IS_DIR:                  return sp_str_lit("SP_ERR_SYS_IS_DIR");
+    case SP_ERR_SYS_NOT_DIR:                 return sp_str_lit("SP_ERR_SYS_NOT_DIR");
+    case SP_ERR_SYS_BAD_FD:                  return sp_str_lit("SP_ERR_SYS_BAD_FD");
+    case SP_ERR_SYS_BUSY:                    return sp_str_lit("SP_ERR_SYS_BUSY");
+    case SP_ERR_SYS_INVALID:                 return sp_str_lit("SP_ERR_SYS_INVALID");
+    case SP_ERR_SYS_NO_SPACE:                return sp_str_lit("SP_ERR_SYS_NO_SPACE");
+    case SP_ERR_SYS_NO_MEMORY:               return sp_str_lit("SP_ERR_SYS_NO_MEMORY");
+    case SP_ERR_SYS_TOO_MANY_FILES:          return sp_str_lit("SP_ERR_SYS_TOO_MANY_FILES");
+    case SP_ERR_SYS_NAME_TOO_LONG:           return sp_str_lit("SP_ERR_SYS_NAME_TOO_LONG");
+    case SP_ERR_SYS_READ_ONLY_FS:            return sp_str_lit("SP_ERR_SYS_READ_ONLY_FS");
+    case SP_ERR_SYS_WOULD_BLOCK:             return sp_str_lit("SP_ERR_SYS_WOULD_BLOCK");
+    case SP_ERR_SYS_BROKEN_PIPE:             return sp_str_lit("SP_ERR_SYS_BROKEN_PIPE");
+    case SP_ERR_SYS_UNSUPPORTED:             return sp_str_lit("SP_ERR_SYS_UNSUPPORTED");
+    case SP_ERR_SYS_TIMED_OUT:               return sp_str_lit("SP_ERR_SYS_TIMED_OUT");
+    case SP_ERR_SYS_CONN_RESET:              return sp_str_lit("SP_ERR_SYS_CONN_RESET");
+    case SP_ERR_SYS_CONN_REFUSED:            return sp_str_lit("SP_ERR_SYS_CONN_REFUSED");
+    case SP_ERR_SYS_NOT_CONNECTED:           return sp_str_lit("SP_ERR_SYS_NOT_CONNECTED");
+    case SP_ERR_SYS_CROSS_DEVICE:            return sp_str_lit("SP_ERR_SYS_CROSS_DEVICE");
+    case SP_ERR_SYS_LOOP:                    return sp_str_lit("SP_ERR_SYS_LOOP");
+    case SP_ERR_SYS_FILE_TOO_BIG:            return sp_str_lit("SP_ERR_SYS_FILE_TOO_BIG");
+    case SP_ERR_SYS_INTERRUPTED:             return sp_str_lit("SP_ERR_SYS_INTERRUPTED");
+    case SP_ERR_SYS_NOT_EMPTY:               return sp_str_lit("SP_ERR_SYS_NOT_EMPTY");
+    case SP_ERR_SYS_BUG:                     return sp_str_lit("SP_ERR_SYS_BUG");
+    case SP_ERR_SYS_ADDR_IN_USE:             return sp_str_lit("SP_ERR_SYS_ADDR_IN_USE");
+    case SP_ERR_SYS_ADDR_UNAVAILABLE:        return sp_str_lit("SP_ERR_SYS_ADDR_UNAVAILABLE");
+    case SP_ERR_SYS_UNREACHABLE:             return sp_str_lit("SP_ERR_SYS_UNREACHABLE");
+    case SP_ERR_SYS_IO:                      return sp_str_lit("SP_ERR_SYS_IO");
+    case SP_ERR_SYS_UNSEEKABLE:              return sp_str_lit("SP_ERR_SYS_UNSEEKABLE");
+    case SP_ERR_SYS_TOO_MANY_LINKS:          return sp_str_lit("SP_ERR_SYS_TOO_MANY_LINKS");
+    case SP_ERR_SYS_NOT_TTY:                 return sp_str_lit("SP_ERR_SYS_NOT_TTY");
+    case SP_ERR_LAZY:                        return sp_str_lit("SP_ERR_LAZY");
+  }
+  return sp_str_lit("");
+}
 sp_tls_block_t sp_tls_block;
+
+sp_err_t sp_sys_is_supported(u32 what) {
+  return sp_atomic_s32_load(&sp_rt.unsupported[what], SP_ATOMIC_RELAXED) ? SP_ERR_SYS_UNSUPPORTED : SP_OK;
+}
+
+void sp_sys_mark_supported(u32 what) {
+  sp_atomic_s32_store(&sp_rt.unsupported[what], 0, SP_ATOMIC_RELAXED);
+}
+
+sp_err_t sp_sys_mark_unsupported(u32 what) {
+  sp_atomic_s32_store(&sp_rt.unsupported[what], 1, SP_ATOMIC_RELAXED);
+  return SP_ERR_SYS_UNSUPPORTED;
+}
+
+sp_err_t sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count, u64* bytes_read) {
+  return (sp_rt.vt->read)(fd, buf, count, bytes_read);
+}
+
+sp_err_t sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count, u64* bytes_written) {
+  return (sp_rt.vt->write)(fd, buf, count, bytes_written);
+}
+
+sp_err_t sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset, u64* bytes_read) {
+  return (sp_rt.vt->pread)(fd, buf, count, offset, bytes_read);
+}
+
+sp_err_t sp_sys_pwrite(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset, u64* bytes_written) {
+  return (sp_rt.vt->pwrite)(fd, buf, count, offset, bytes_written);
+}
+
+sp_err_t sp_sys_transfer(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64* bytes_moved) {
+  return (sp_rt.vt->transfer)(in, in_pos, out, count, bytes_moved);
+}
+
+sp_err_t sp_sys_transfer_positional(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64 offset, u64* bytes_moved) {
+  return (sp_rt.vt->transfer_positional)(in, in_pos, out, count, offset, bytes_moved);
+}
+
+sp_sys_fd_t sp_sys_get_root(s32 it) {
+  return (sp_rt.vt->get_root)(it);
+}
+
+s64 sp_sys_get_exe_path(c8* buf, u64 size) {
+  return (sp_rt.vt->get_exe_path)(buf, size);
+}
+
+s64 sp_sys_get_cwd_path(c8* buf, u64 size) {
+  return (sp_rt.vt->get_cwd_path)(buf, size);
+}
+
+s64 sp_sys_get_storage_path(c8* buf, u64 size) {
+  return (sp_rt.vt->get_storage_path)(buf, size);
+}
+
+s64 sp_sys_get_config_path(c8* buf, u64 size) {
+  return (sp_rt.vt->get_config_path)(buf, size);
+}
+
+sp_err_t sp_sys_open(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out) {
+  return (sp_rt.vt->open)(fd, path, len, mode, flags, out);
+}
+
+sp_err_t sp_sys_open_dir(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_fd_t* out) {
+  return (sp_rt.vt->open_dir)(fd, path, len, out);
+}
+
+sp_err_t sp_sys_close(sp_sys_fd_t fd) {
+  return (sp_rt.vt->close)(fd);
+}
+
+sp_err_t sp_sys_pipe(sp_sys_pipe_t* pipe, sp_sys_pipe_desc_t desc) {
+  return (sp_rt.vt->pipe)(pipe, desc);
+}
+
+sp_err_t sp_sys_pipe_ready(sp_sys_fd_t fd, u8* ready) {
+  return (sp_rt.vt->pipe_ready)(fd, ready);
+}
+
+sp_err_t sp_sys_mkdir(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode) {
+  return (sp_rt.vt->mkdir)(fd, path, len, mode);
+}
+
+sp_err_t sp_sys_rmdir(sp_sys_fd_t fd, const c8* path, u32 len) {
+  return (sp_rt.vt->rmdir)(fd, path, len);
+}
+
+sp_err_t sp_sys_unlink(sp_sys_fd_t fd, const c8* path, u32 len) {
+  return (sp_rt.vt->unlink)(fd, path, len);
+}
+
+sp_err_t sp_sys_rename(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len) {
+  return (sp_rt.vt->rename)(from_fd, from, from_len, to_fd, alias, alias_len);
+}
+
+sp_err_t sp_sys_link(sp_sys_fd_t from, const c8* existing, u32 existing_len, sp_sys_fd_t to, const c8* alias, u32 alias_len) {
+  return (sp_rt.vt->link)(from, existing, existing_len, to, alias, alias_len);
+}
+
+sp_err_t sp_sys_symlink(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len) {
+  return (sp_rt.vt->symlink)(existing, existing_len, to_fd, alias, alias_len);
+}
+
+sp_err_t sp_sys_get_path_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st) {
+  return (sp_rt.vt->get_path_metadata)(fd, path, len, st);
+}
+
+sp_err_t sp_sys_get_link_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st) {
+  return (sp_rt.vt->get_link_metadata)(fd, path, len, st);
+}
+
+sp_err_t sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st) {
+  return (sp_rt.vt->get_file_metadata)(fd, st);
+}
+
+sp_err_t sp_sys_chmod(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st) {
+  return (sp_rt.vt->chmod)(fd, path, len, st);
+}
+
+sp_err_t sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts) {
+  return (sp_rt.vt->clock_gettime)(clockid, ts);
+}
+
+sp_err_t sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem) {
+  return (sp_rt.vt->nanosleep)(req, rem);
+}
+
+bool sp_sys_futex_wait(u32* addr, u32 expected, const sp_sys_timespec_t* timeout) {
+  return (sp_rt.vt->futex_wait)(addr, expected, timeout);
+}
+
+void sp_sys_futex_wake(u32* addr) {
+  (sp_rt.vt->futex_wake)(addr);
+}
+
+void sp_sys_futex_wake_all(u32* addr) {
+  (sp_rt.vt->futex_wake_all)(addr);
+}
+
+s64 sp_sys_canonicalize_path(const c8* path, u32 len, c8* buf, u64 size) {
+  return (sp_rt.vt->canonicalize_path)(path, len, buf, size);
+}
+
+sp_err_t sp_sys_event_open(sp_sys_event_t* out) {
+  return (sp_rt.vt->event_open)(out);
+}
+
+sp_err_t sp_sys_event_signal(sp_sys_event_t event) {
+  return (sp_rt.vt->event_signal)(event);
+}
+
+sp_err_t sp_sys_event_clear(sp_sys_event_t event) {
+  return (sp_rt.vt->event_clear)(event);
+}
+
+sp_err_t sp_sys_wait(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled) {
+  return (sp_rt.vt->wait)(fds, n, timeout_ms, signaled);
+}
+
+sp_err_t sp_sys_tty_get(sp_sys_fd_t fd, sp_sys_tty_attr_t* attr) {
+  return (sp_rt.vt->tty_get)(fd, attr);
+}
+
+sp_err_t sp_sys_tty_set(sp_sys_fd_t fd, const sp_sys_tty_attr_t* attr) {
+  return (sp_rt.vt->tty_set)(fd, attr);
+}
+
+sp_err_t sp_sys_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows) {
+  return (sp_rt.vt->tty_size)(fd, cols, rows);
+}
+
+bool sp_sys_is_tty(sp_sys_fd_t fd) {
+  return (sp_rt.vt->is_tty)(fd);
+}
+
+sp_err_t sp_sys_tty_ready(sp_sys_fd_t fd, u8* ready) {
+  return (sp_rt.vt->tty_ready)(fd, ready);
+}
+
+sp_err_t sp_sys_tty_mode_apply(sp_sys_tty_attr_t* in, sp_sys_tty_attr_t* out, sp_sys_tty_mode_t mode) {
+  return (sp_rt.vt->tty_mode_apply)(in, out, mode);
+}
+
+sp_err_t sp_sys_tty_use_vt(sp_sys_fd_t fd) {
+  return (sp_rt.vt->tty_use_vt)(fd);
+}
+
+sp_err_t sp_tty_set_mode(sp_sys_fd_t in, sp_sys_fd_t out, sp_sys_tty_mode_t mode, sp_sys_tty_state_t* saved) {
+  sp_sys_tty_state_t state = sp_zero;
+
+  sp_err_t err = sp_sys_tty_get(in, &state.in);
+  if (err) return err;
+  sp_sys_tty_get(out, &state.out);
+
+  sp_sys_tty_state_t next = state;
+  err = sp_sys_tty_mode_apply(&next.in, &next.out, mode);
+  if (err) return err;
+
+  err = sp_sys_tty_set(in, &next.in);
+  if (err) return err;
+  sp_sys_tty_set(out, &next.out);
+
+  if (saved) *saved = state;
+  return SP_OK;
+}
+
+sp_err_t sp_tty_restore(sp_sys_fd_t in, sp_sys_fd_t out, const sp_sys_tty_state_t* saved) {
+  sp_err_t err = sp_sys_tty_set(out, &saved->out);
+
+  sp_err_t in_err = sp_sys_tty_set(in, &saved->in);
+  if (!err) err = in_err;
+
+  return err;
+}
+
+sp_err_t sp_sys_socket_open(sp_sys_socket_t* out, sp_sys_handle_desc_t desc) {
+  return (sp_rt.vt->socket_open)(out, desc);
+}
+
+sp_err_t sp_sys_socket_bind(sp_sys_socket_t socket, sp_sys_ipv4_t addr) {
+  return (sp_rt.vt->socket_bind)(socket, addr);
+}
+
+sp_err_t sp_sys_socket_listen(sp_sys_socket_t socket, u32 backlog) {
+  return (sp_rt.vt->socket_listen)(socket, backlog);
+}
+
+sp_err_t sp_sys_socket_connect(sp_sys_socket_t socket, sp_sys_ipv4_t addr) {
+  return (sp_rt.vt->socket_connect)(socket, addr);
+}
+
+sp_err_t sp_sys_socket_error(sp_sys_socket_t socket) {
+  return (sp_rt.vt->socket_error)(socket);
+}
+
+sp_err_t sp_sys_socket_accept(sp_sys_socket_t listener, sp_sys_handle_desc_t desc, sp_sys_socket_t* out) {
+  return (sp_rt.vt->socket_accept)(listener, desc, out);
+}
+
+sp_err_t sp_sys_socket_close(sp_sys_socket_t socket) {
+  return (sp_rt.vt->socket_close)(socket);
+}
+
+sp_err_t sp_sys_socket_recv(sp_sys_socket_t socket, void* buf, u64 count, u64* bytes_read) {
+  return (sp_rt.vt->socket_recv)(socket, buf, count, bytes_read);
+}
+
+sp_err_t sp_sys_socket_send(sp_sys_socket_t socket, const void* buf, u64 count, u64* bytes_written) {
+  return (sp_rt.vt->socket_send)(socket, buf, count, bytes_written);
+}
+
+sp_err_t sp_sys_socket_wait(sp_sys_socket_t socket, bool readable, u32 timeout_ms) {
+  return (sp_rt.vt->socket_wait)(socket, readable, timeout_ms);
+}
+
+sp_err_t sp_sys_socket_set_nonblocking(sp_sys_socket_t socket) {
+  return (sp_rt.vt->socket_set_nonblocking)(socket);
+}
+
+sp_err_t sp_sys_socket_reuse_addr(sp_sys_socket_t socket) {
+  return (sp_rt.vt->socket_reuse_addr)(socket);
+}
+
+sp_err_t sp_sys_socket_local_port(sp_sys_socket_t socket, u16* out) {
+  return (sp_rt.vt->socket_local_port)(socket, out);
+}
+
+void* sp_sys_alloc(u64 size) {
+  return (sp_rt.vt->alloc)(size);
+}
+
+void sp_sys_free(void* ptr, u64 size) {
+  (sp_rt.vt->free)(ptr, size);
+}
+
+void* sp_sys_memcpy(void* dest, const void* src, u64 n) {
+  return (sp_rt.vt->memcpy)(dest, src, n);
+}
+
+void* sp_sys_memmove(void* dest, const void* src, u64 n) {
+  return (sp_rt.vt->memmove)(dest, src, n);
+}
+
+void* sp_sys_memset(void* dest, u8 fill, u64 n) {
+  return (sp_rt.vt->memset)(dest, fill, n);
+}
+
+s32 sp_sys_memcmp(const void* a, const void* b, u64 n) {
+  return (sp_rt.vt->memcmp)(a, b, n);
+}
+
+void sp_sys_assert(bool cond) {
+  (sp_rt.vt->assert)(cond);
+}
+
+void sp_sys_exit(s32 code) {
+  (sp_rt.vt->exit)(code);
+}
+
+void sp_sys_env(const c8** env, u32* len) {
+  (sp_rt.vt->env)(env, len);
+}
+
+s64 sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence) {
+  return (sp_rt.vt->lseek)(fd, offset, whence);
+}
+
+sp_err_t sp_sys_chdir(const c8* path, u32 len) {
+  return (sp_rt.vt->chdir)(path, len);
+}
+
+sp_err_t sp_sys_dir_from_fd(sp_sys_fd_t fd, sp_sys_dir_t* out) {
+  return (sp_rt.vt->dir_from_fd)(fd, out);
+}
+
+sp_err_t sp_sys_dir_read(sp_sys_dir_t* dir, sp_mem_buffer_t* buf) {
+  return (sp_rt.vt->dir_read)(dir, buf);
+}
+
+sp_err_t sp_sys_dir_parse(sp_sys_dir_t* dir, sp_mem_buffer_t* buf, u64* cursor, sp_sys_dir_entry_t* out) {
+  return (sp_rt.vt->dir_parse)(dir, buf, cursor, out);
+}
+
+sp_err_t sp_sys_dir_close(sp_sys_dir_t* dir) {
+  return (sp_rt.vt->dir_close)(dir);
+}
+
+const sp_sys_vtable_t* sp_sys_set_vtable(const sp_sys_vtable_t* vt) {
+  const sp_sys_vtable_t* old = sp_rt.vt;
+  sp_rt.vt = vt;
+  return old;
+}
 #if defined(SP_FREESTANDING) || defined(SP_WASM_FREESTANDING)
 c8** environ;
-s32 errno;
 #endif
 
 //   █████████  █████ █████  █████████
@@ -4088,242 +6181,99 @@ s32 errno;
   extern _Noreturn void __wasi_proc_exit(__wasi_exitcode_t code);
 #endif
 
+#if defined(SP_WASM)
+#define SP_WASI_ESUCCESS      0
+#define SP_WASI_EACCES        2
+#define SP_WASI_EAGAIN        6
+#define SP_WASI_EBADF         8
+#define SP_WASI_EBUSY         10
+#define SP_WASI_ECONNREFUSED  14
+#define SP_WASI_ECONNRESET    15
+#define SP_WASI_EDQUOT        19
+#define SP_WASI_EEXIST        20
+#define SP_WASI_EFBIG         22
+#define SP_WASI_EINTR         27
+#define SP_WASI_EINVAL        28
+#define SP_WASI_EIO           29
+#define SP_WASI_EISDIR        31
+#define SP_WASI_ELOOP         32
+#define SP_WASI_EMFILE        33
+#define SP_WASI_EMLINK        34
+#define SP_WASI_ENAMETOOLONG  37
+#define SP_WASI_ENFILE        41
+#define SP_WASI_ENOENT        44
+#define SP_WASI_ENOMEM        48
+#define SP_WASI_ENOSPC        51
+#define SP_WASI_ENOSYS        52
+#define SP_WASI_ENOTCONN      53
+#define SP_WASI_ENOTDIR       54
+#define SP_WASI_ENOTEMPTY     55
+#define SP_WASI_ENOTSUP       58
+#define SP_WASI_EPERM         63
+#define SP_WASI_EPIPE         64
+#define SP_WASI_EROFS         69
+#define SP_WASI_ESPIPE        70
+#define SP_WASI_ETIMEDOUT     73
+#define SP_WASI_ETXTBSY       74
+#define SP_WASI_EXDEV         75
+#define SP_WASI_ENOTCAPABLE   76
+
+SP_PRIVATE sp_err_t sp_sys_err_from_wasi(__wasi_errno_t e) {
+  switch (e) {
+    case SP_WASI_ESUCCESS:     return SP_OK;
+    case SP_WASI_ENOENT:       return SP_ERR_SYS_NOT_FOUND;
+    case SP_WASI_EPERM:
+    case SP_WASI_EACCES:
+    case SP_WASI_ENOTCAPABLE:  return SP_ERR_SYS_ACCESS_DENIED;
+    case SP_WASI_EEXIST:       return SP_ERR_SYS_EXISTS;
+    case SP_WASI_EISDIR:       return SP_ERR_SYS_IS_DIR;
+    case SP_WASI_ENOTDIR:      return SP_ERR_SYS_NOT_DIR;
+    case SP_WASI_EBADF:        return SP_ERR_SYS_BAD_FD;
+    case SP_WASI_EBUSY:
+    case SP_WASI_ETXTBSY:      return SP_ERR_SYS_BUSY;
+    case SP_WASI_EINVAL:       return SP_ERR_SYS_INVALID;
+    case SP_WASI_ENOSPC:
+    case SP_WASI_EDQUOT:       return SP_ERR_SYS_NO_SPACE;
+    case SP_WASI_ENOMEM:       return SP_ERR_SYS_NO_MEMORY;
+    case SP_WASI_EMFILE:
+    case SP_WASI_ENFILE:       return SP_ERR_SYS_TOO_MANY_FILES;
+    case SP_WASI_ENAMETOOLONG: return SP_ERR_SYS_NAME_TOO_LONG;
+    case SP_WASI_EROFS:        return SP_ERR_SYS_READ_ONLY_FS;
+    case SP_WASI_EAGAIN:       return SP_ERR_SYS_WOULD_BLOCK;
+    case SP_WASI_EPIPE:        return SP_ERR_SYS_BROKEN_PIPE;
+    case SP_WASI_ENOSYS:
+    case SP_WASI_ENOTSUP:      return SP_ERR_SYS_UNSUPPORTED;
+    case SP_WASI_ETIMEDOUT:    return SP_ERR_SYS_TIMED_OUT;
+    case SP_WASI_ECONNRESET:   return SP_ERR_SYS_CONN_RESET;
+    case SP_WASI_ECONNREFUSED: return SP_ERR_SYS_CONN_REFUSED;
+    case SP_WASI_ENOTCONN:     return SP_ERR_SYS_NOT_CONNECTED;
+    case SP_WASI_EXDEV:        return SP_ERR_SYS_CROSS_DEVICE;
+    case SP_WASI_ELOOP:        return SP_ERR_SYS_LOOP;
+    case SP_WASI_EFBIG:        return SP_ERR_SYS_FILE_TOO_BIG;
+    case SP_WASI_EINTR:        return SP_ERR_SYS_INTERRUPTED;
+    case SP_WASI_ENOTEMPTY:    return SP_ERR_SYS_NOT_EMPTY;
+    case SP_WASI_EIO:          return SP_ERR_SYS_IO;
+    case SP_WASI_ESPIPE:       return SP_ERR_SYS_UNSEEKABLE;
+    case SP_WASI_EMLINK:       return SP_ERR_SYS_TOO_MANY_LINKS;
+    default:                   return SP_ERR_SYS;
+  }
+}
+#endif
+
 
 #if defined(SP_LINUX)
-// We vendor any constant we use on Linux to make freestanding compilation as simple as
-// possible. We also vendor types, for the same reason. Since our Linux backend never calls
-// libc, there is no possibility of a mismatch between a vendored struct and a libc struct.
-//
-// In cases where a piece of code only uses libc functions that are trivial wrappers over
-// syscalls (e.g. ioctl), we'll do something like this:
-//
-// #if defined(SP_LINUX)
-//   typedef sp_sys_termios_t sp_termios_t;
-// #else
-//   typedef struct termios sp_termios_t;
-// #endif
-//
-// Which lets us (a) reuse the code that needs struct termios, identically (b) without
-// needing to include termios.h on Linux, but also (c) not risking a struct mismatch
-// when we're using libc.
-//
-// This kind of trick, and any similar sp_sys_* struct, gets defined in the implementation
-// section to avoid polluting every TU that doesn't define the implementation. If
-// something's in the header section but not part of the public API, it's probably a
-// mistake
-
-/////////////////////
-// SYSCALL NUMBERS //
-/////////////////////
-
-#if defined(SP_AMD64)
-  #define SP_SYSCALL_NUM_READ              0
-  #define SP_SYSCALL_NUM_WRITE             1
-  #define SP_SYSCALL_NUM_PREAD64           17
-  #define SP_SYSCALL_NUM_PWRITE64          18
-  #define SP_SYSCALL_NUM_OPEN              2
-  #define SP_SYSCALL_NUM_CLOSE             3
-  #define SP_SYSCALL_NUM_STAT              4
-  #define SP_SYSCALL_NUM_FSTAT             5
-  #define SP_SYSCALL_NUM_LSTAT             6
-  #define SP_SYSCALL_NUM_POLL              7
-  #define SP_SYSCALL_NUM_LSEEK             8
-  #define SP_SYSCALL_NUM_MMAP              9
-  #define SP_SYSCALL_NUM_MUNMAP            11
-  #define SP_SYSCALL_NUM_SIGACTION         13
-  #define SP_SYSCALL_NUM_IOCTL             16
-  #define SP_SYSCALL_NUM_MREMAP            25
-  #define SP_SYSCALL_NUM_DUP2              33
-  #define SP_SYSCALL_NUM_NANOSLEEP         35
-  #define SP_SYSCALL_NUM_GETPID            39
-  #define SP_SYSCALL_NUM_SENDFILE          40
-  #define SP_SYSCALL_NUM_COPY_FILE_RANGE   326
-  #define SP_SYSCALL_NUM_CLONE             56
-  #define SP_SYSCALL_NUM_FORK              57
-  #define SP_SYSCALL_NUM_EXECVE            59
-  #define SP_SYSCALL_NUM_EXIT              60
-  #define SP_SYSCALL_NUM_WAIT4             61
-  #define SP_SYSCALL_NUM_KILL              62
-  #define SP_SYSCALL_NUM_FCNTL             72
-  #define SP_SYSCALL_NUM_GETCWD            79
-  #define SP_SYSCALL_NUM_CHDIR             80
-  #define SP_SYSCALL_NUM_RENAME            82
-  #define SP_SYSCALL_NUM_MKDIR             83
-  #define SP_SYSCALL_NUM_RMDIR             84
-  #define SP_SYSCALL_NUM_LINK              86
-  #define SP_SYSCALL_NUM_UNLINK            87
-  #define SP_SYSCALL_NUM_SYMLINK           88
-  #define SP_SYSCALL_NUM_READLINK          89
-  #define SP_SYSCALL_NUM_CHMOD             90
-  #define SP_SYSCALL_NUM_FCHMOD            91
-  #define SP_SYSCALL_NUM_ARCH_PRCTL        158
-  #define SP_SYSCALL_NUM_GETTID            186
-  #define SP_SYSCALL_NUM_SCHED_GETAFFINITY 204
-  #define SP_SYSCALL_NUM_GETDENTS64        217
-  #define SP_SYSCALL_NUM_CLOCK_GETTIME     228
-  #define SP_SYSCALL_NUM_CLOCK_NANOSLEEP   230
-  #define SP_SYSCALL_NUM_EXIT_GROUP        231
-  #define SP_SYSCALL_NUM_INOTIFY_ADD_WATCH 254
-  #define SP_SYSCALL_NUM_INOTIFY_RM_WATCH  255
-  #define SP_SYSCALL_NUM_OPENAT            257
-  #define SP_SYSCALL_NUM_MKDIRAT           258
-  #define SP_SYSCALL_NUM_NEWFSTATAT        262
-  #define SP_SYSCALL_NUM_UNLINKAT          263
-  #define SP_SYSCALL_NUM_RENAMEAT          264
-  #define SP_SYSCALL_NUM_LINKAT            265
-  #define SP_SYSCALL_NUM_SYMLINKAT         266
-  #define SP_SYSCALL_NUM_READLINKAT        267
-  #define SP_SYSCALL_NUM_FCHMODAT          268
-  #define SP_SYSCALL_NUM_PPOLL             271
-  #define SP_SYSCALL_NUM_DUP3              292
-  #define SP_SYSCALL_NUM_PIPE2             293
-  #define SP_SYSCALL_NUM_INOTIFY_INIT1     294
-  #define SP_SYSCALL_NUM_PERF_EVENT_OPEN   298
-
-#elif defined(SP_ARM64)
-  #define SP_SYSCALL_NUM_GETCWD            17
-  #define SP_SYSCALL_NUM_DUP3              24
-  #define SP_SYSCALL_NUM_FCNTL             25
-  #define SP_SYSCALL_NUM_INOTIFY_INIT1     26
-  #define SP_SYSCALL_NUM_INOTIFY_ADD_WATCH 27
-  #define SP_SYSCALL_NUM_INOTIFY_RM_WATCH  28
-  #define SP_SYSCALL_NUM_IOCTL             29
-  #define SP_SYSCALL_NUM_MKDIRAT           34
-  #define SP_SYSCALL_NUM_UNLINKAT          35
-  #define SP_SYSCALL_NUM_SYMLINKAT         36
-  #define SP_SYSCALL_NUM_LINKAT            37
-  #define SP_SYSCALL_NUM_RENAMEAT          38
-  #define SP_SYSCALL_NUM_CHDIR             49
-  #define SP_SYSCALL_NUM_FCHMOD            52
-  #define SP_SYSCALL_NUM_FCHMODAT          53
-  #define SP_SYSCALL_NUM_OPENAT            56
-  #define SP_SYSCALL_NUM_CLOSE             57
-  #define SP_SYSCALL_NUM_PIPE2             59
-  #define SP_SYSCALL_NUM_GETDENTS64        61
-  #define SP_SYSCALL_NUM_LSEEK             62
-  #define SP_SYSCALL_NUM_READ              63
-  #define SP_SYSCALL_NUM_WRITE             64
-  #define SP_SYSCALL_NUM_PREAD64           67
-  #define SP_SYSCALL_NUM_PWRITE64          68
-  #define SP_SYSCALL_NUM_PPOLL             73
-  #define SP_SYSCALL_NUM_READLINKAT        78
-  #define SP_SYSCALL_NUM_NEWFSTATAT        79
-  #define SP_SYSCALL_NUM_FSTAT             80
-  #define SP_SYSCALL_NUM_EXIT              93
-  #define SP_SYSCALL_NUM_EXIT_GROUP        94
-  #define SP_SYSCALL_NUM_NANOSLEEP         101
-  #define SP_SYSCALL_NUM_CLOCK_GETTIME     113
-  #define SP_SYSCALL_NUM_CLOCK_NANOSLEEP   115
-  #define SP_SYSCALL_NUM_SCHED_GETAFFINITY 123
-  #define SP_SYSCALL_NUM_KILL              129
-  #define SP_SYSCALL_NUM_SIGACTION         134
-  #define SP_SYSCALL_NUM_GETPID            172
-  #define SP_SYSCALL_NUM_GETTID            178
-  #define SP_SYSCALL_NUM_MUNMAP            215
-  #define SP_SYSCALL_NUM_MREMAP            216
-  #define SP_SYSCALL_NUM_CLONE             220
-  #define SP_SYSCALL_NUM_EXECVE            221
-  #define SP_SYSCALL_NUM_MMAP              222
-  #define SP_SYSCALL_NUM_PERF_EVENT_OPEN   241
-  #define SP_SYSCALL_NUM_WAIT4             260
-  #define SP_SYSCALL_NUM_SENDFILE          71
-  #define SP_SYSCALL_NUM_COPY_FILE_RANGE   285
-  #define SP_SYSCALL_NUM_OPEN              SP_SYSCALL_NUM_OPENAT
-  #define SP_SYSCALL_NUM_STAT              SP_SYSCALL_NUM_NEWFSTATAT
-  #define SP_SYSCALL_NUM_LSTAT             SP_SYSCALL_NUM_NEWFSTATAT
-  #define SP_SYSCALL_NUM_MKDIR             SP_SYSCALL_NUM_MKDIRAT
-  #define SP_SYSCALL_NUM_RMDIR             SP_SYSCALL_NUM_UNLINKAT
-  #define SP_SYSCALL_NUM_UNLINK            SP_SYSCALL_NUM_UNLINKAT
-  #define SP_SYSCALL_NUM_RENAME            SP_SYSCALL_NUM_RENAMEAT
-  #define SP_SYSCALL_NUM_READLINK          SP_SYSCALL_NUM_READLINKAT
-  #define SP_SYSCALL_NUM_CHMOD             SP_SYSCALL_NUM_FCHMODAT
-  #define SP_SYSCALL_NUM_FORK              SP_SYSCALL_NUM_CLONE
-  #define SP_SYSCALL_NUM_DUP2              SP_SYSCALL_NUM_DUP3
-  #define SP_SYSCALL_NUM_SYMLINK           SP_SYSCALL_NUM_SYMLINKAT
-  #define SP_SYSCALL_NUM_LINK              SP_SYSCALL_NUM_LINKAT
-#endif
-
-///////////
-// TYPES //
-///////////
-typedef struct {
-  s32 wd;
-  u32 mask;
-  u32 cookie;
-  u32 len;
-  c8  name[];
-} sp_sys_inotify_event_t;
-
-typedef struct {
-  u64 d_ino;
-  s64 d_off;
-  u16 d_reclen;
-  u8  d_type;
-  c8  d_name[];
-} sp_sys_dirent64_t;
-
-typedef struct {
-  u16 ws_row;
-  u16 ws_col;
-  u16 ws_xpixel;
-  u16 ws_ypixel;
-} sp_sys_winsize_t;
-
-#if defined(SP_AMD64)
-  typedef struct {
-    u64 st_dev;
-    u64 st_ino;
-    u64 st_nlink;
-    u32 st_mode;
-    u32 st_uid;
-    u32 st_gid;
-    u32 __pad0;
-    u64 st_rdev;
-    s64 st_size;
-    s64 st_blksize;
-    s64 st_blocks;
-    u64 st_atime_sec;
-    u64 st_atime_nsec;
-    u64 st_mtime_sec;
-    u64 st_mtime_nsec;
-    u64 st_ctime_sec;
-    u64 st_ctime_nsec;
-    s64 __unused[3];
-  } sp_sys_linux_stat_t;
-
-#elif defined(SP_ARM64)
-  typedef struct {
-    u64 st_dev;
-    u64 st_ino;
-    u32 st_mode;
-    u32 st_nlink;
-    u32 st_uid;
-    u32 st_gid;
-    u64 st_rdev;
-    u64 __pad;
-    s64  st_size;
-    s32  st_blksize;
-    s32  __pad2;
-    s64  st_blocks;
-    u64 st_atime_sec;
-    u64 st_atime_nsec;
-    u64 st_mtime_sec;
-    u64 st_mtime_nsec;
-    u64 st_ctime_sec;
-    u64 st_ctime_nsec;
-    u32 padding [2];
-  } sp_sys_linux_stat_t;
-#endif
-
 /////////////////////
 // SYSCALL HELPERS //
 /////////////////////
-s64 __sp_syscall_ret(u64 r) {
-	if (r > -4096UL) {
-		errno = (s32)-r;
-		return -1;
-	}
+s64 __sp_syscall_ret_r(u64 r) {
+	if (r > -4096UL) return (s64)-r;
 	return (s64)r;
+}
+
+SP_PRIVATE sp_err_t sp_sys_err_from_errno(s64 e);
+
+sp_err_t __sp_syscall_ret_e(u64 r) {
+  return sp_sys_err_from_errno(__sp_syscall_ret_r(r));
 }
 
 s64 sp_syscall0(s64 n) {
@@ -4438,6 +6388,54 @@ s64 sp_syscall6(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6) {
   return ret;
 }
 
+s64 sp_syscall_retry1(s64 n, s64 a1) {
+  s64 rc;
+  do {
+    rc = sp_syscall1(n, a1);
+  } while (rc == -SP_EINTR);
+  return rc;
+}
+
+s64 sp_syscall_retry2(s64 n, s64 a1, s64 a2) {
+  s64 rc;
+  do {
+    rc = sp_syscall2(n, a1, a2);
+  } while (rc == -SP_EINTR);
+  return rc;
+}
+
+s64 sp_syscall_retry3(s64 n, s64 a1, s64 a2, s64 a3) {
+  s64 rc;
+  do {
+    rc = sp_syscall3(n, a1, a2, a3);
+  } while (rc == -SP_EINTR);
+  return rc;
+}
+
+s64 sp_syscall_retry4(s64 n, s64 a1, s64 a2, s64 a3, s64 a4) {
+  s64 rc;
+  do {
+    rc = sp_syscall4(n, a1, a2, a3, a4);
+  } while (rc == -SP_EINTR);
+  return rc;
+}
+
+s64 sp_syscall_retry5(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5) {
+  s64 rc;
+  do {
+    rc = sp_syscall5(n, a1, a2, a3, a4, a5);
+  } while (rc == -SP_EINTR);
+  return rc;
+}
+
+s64 sp_syscall_retry6(s64 n, s64 a1, s64 a2, s64 a3, s64 a4, s64 a5, s64 a6) {
+  s64 rc;
+  do {
+    rc = sp_syscall6(n, a1, a2, a3, a4, a5, a6);
+  } while (rc == -SP_EINTR);
+  return rc;
+}
+
 s32 sp_syscall_notify_init1(s32 flags) {
   return (s32)sp_syscall(SP_SYSCALL_NUM_INOTIFY_INIT1, flags);
 }
@@ -4450,28 +6448,74 @@ s32 sp_syscall_wait4(s32 pid, s32* status, s32 options, void* rusage) {
   return (s32)sp_syscall(SP_SYSCALL_NUM_WAIT4, pid, status, options, rusage);
 }
 
-static void sp_sys_file_meta_from_linux(const sp_sys_linux_stat_t* raw, sp_sys_file_meta_t* out) {
-  if      (SP_S_ISLNK(raw->st_mode)) out->kind = SP_FS_KIND_SYMLINK;
-  else if (SP_S_ISDIR(raw->st_mode)) out->kind = SP_FS_KIND_DIR;
-  else if (SP_S_ISREG(raw->st_mode)) out->kind = SP_FS_KIND_FILE;
-  else                               out->kind = SP_FS_KIND_NONE;
+typedef struct {
+  s64 tv_sec;
+  u32 tv_nsec;
+  s32 reserved;
+} sp_sys_linux_statx_timestamp_t;
 
-  out->size             = raw->st_size;
-  out->atime.tv_sec     = (s64)raw->st_atime_sec;
-  out->atime.tv_nsec    = (s64)raw->st_atime_nsec;
-  out->mtime.tv_sec     = (s64)raw->st_mtime_sec;
-  out->mtime.tv_nsec    = (s64)raw->st_mtime_nsec;
-  out->btime.tv_sec     = (s64)raw->st_ctime_sec;
-  out->btime.tv_nsec    = (s64)raw->st_ctime_nsec;
-  out->id               = raw->st_ino;
-  out->device           = raw->st_dev;
-  out->nlink            = raw->st_nlink;
-  out->raw_attrs        = raw->st_mode;
+typedef struct {
+  u32 stx_mask;
+  u32 stx_blksize;
+  u64 stx_attributes;
+  u32 stx_nlink;
+  u32 stx_uid;
+  u32 stx_gid;
+  u16 stx_mode;
+  u16 spare0;
+  u64 stx_ino;
+  u64 stx_size;
+  u64 stx_blocks;
+  u64 stx_attributes_mask;
+  sp_sys_linux_statx_timestamp_t stx_atime;
+  sp_sys_linux_statx_timestamp_t stx_btime;
+  sp_sys_linux_statx_timestamp_t stx_ctime;
+  sp_sys_linux_statx_timestamp_t stx_mtime;
+  u32 stx_rdev_major;
+  u32 stx_rdev_minor;
+  u32 stx_dev_major;
+  u32 stx_dev_minor;
+  u64 stx_mnt_id;
+  u32 stx_dio_mem_align;
+  u32 stx_dio_offset_align;
+  u64 spare3 [12];
+} sp_sys_linux_statx_t;
+
+static void sp_sys_file_meta_from_statx(const sp_sys_linux_statx_t* raw, sp_sys_file_meta_t* out) {
+  if      (SP_S_ISLNK(raw->stx_mode)) out->kind = SP_FS_KIND_SYMLINK;
+  else if (SP_S_ISDIR(raw->stx_mode)) out->kind = SP_FS_KIND_DIR;
+  else if (SP_S_ISREG(raw->stx_mode)) out->kind = SP_FS_KIND_FILE;
+  else                                out->kind = SP_FS_KIND_NONE;
+
+  out->size          = (s64)raw->stx_size;
+  out->atime.tv_sec  = raw->stx_atime.tv_sec;
+  out->atime.tv_nsec = (s64)raw->stx_atime.tv_nsec;
+  out->mtime.tv_sec  = raw->stx_mtime.tv_sec;
+  out->mtime.tv_nsec = (s64)raw->stx_mtime.tv_nsec;
+  // Zero when the filesystem has no birth time; never another timestamp.
+  out->btime = sp_zero_s(sp_sys_timespec_t);
+  if (raw->stx_mask & SP_SYS_LINUX_STATX_BTIME) {
+    out->btime.tv_sec  = raw->stx_btime.tv_sec;
+    out->btime.tv_nsec = (s64)raw->stx_btime.tv_nsec;
+  }
+  out->id        = raw->stx_ino;
+  out->device    = ((u64)raw->stx_dev_major << 32) | raw->stx_dev_minor;
+  out->nlink     = raw->stx_nlink;
+  out->raw_attrs = raw->stx_mode;
 }
 
 s64 sp_lx_getdents64(s32 fd, void* buf, u64 count) {
-  return sp_syscall(SP_SYSCALL_NUM_GETDENTS64, fd, buf, count);
+  return sp_syscall_retry(SP_SYSCALL_NUM_GETDENTS64, fd, buf, count);
 }
+
+bool sp_sys_is_err(s64 rc) {
+  return rc < 0;
+}
+
+bool sp_sys_match(s64 rc, s32 err) {
+  return -rc == err;
+}
+
 #endif
 
 #if defined(SP_MACOS) || defined(SP_COSMO)
@@ -4498,33 +6542,89 @@ static void sp_sys_file_meta_from_libc(const struct stat* src, sp_sys_file_meta_
   out->atime.tv_nsec = (s64)src->st_atim.tv_nsec;
   out->mtime.tv_sec  = (s64)src->st_mtim.tv_sec;
   out->mtime.tv_nsec = (s64)src->st_mtim.tv_nsec;
-  out->btime         = out->mtime;
+  // No birth time on cosmo; absent is zero, not a copy of another timestamp.
+  out->btime         = sp_zero_s(sp_sys_timespec_t);
 #endif
+}
+
+#endif
+
+#if defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO)
+SP_PRIVATE sp_err_t sp_sys_err_from_errno(s64 e) {
+  switch (e) {
+    case SP_EOK:          return SP_OK;
+    case SP_ENOENT:       return SP_ERR_SYS_NOT_FOUND;
+    case SP_EPERM:
+    case SP_EACCES:       return SP_ERR_SYS_ACCESS_DENIED;
+    case SP_EEXIST:       return SP_ERR_SYS_EXISTS;
+    case SP_EISDIR:       return SP_ERR_SYS_IS_DIR;
+    case SP_ENOTDIR:      return SP_ERR_SYS_NOT_DIR;
+    case SP_EBADF:        return SP_ERR_SYS_BAD_FD;
+    case SP_EBUSY:
+    case SP_ETXTBSY:      return SP_ERR_SYS_BUSY;
+    case SP_EINVAL:       return SP_ERR_SYS_INVALID;
+    case SP_ENOSPC:
+    case SP_EDQUOT:       return SP_ERR_SYS_NO_SPACE;
+    case SP_ENOMEM:
+    case SP_ENOBUFS:      return SP_ERR_SYS_NO_MEMORY;
+    case SP_EMFILE:
+    case SP_ENFILE:       return SP_ERR_SYS_TOO_MANY_FILES;
+    case SP_ENAMETOOLONG: return SP_ERR_SYS_NAME_TOO_LONG;
+    case SP_EROFS:        return SP_ERR_SYS_READ_ONLY_FS;
+    case SP_EAGAIN:       return SP_ERR_SYS_WOULD_BLOCK;
+    case SP_EPIPE:        return SP_ERR_SYS_BROKEN_PIPE;
+    case SP_ENOSYS:
+    case SP_EOPNOTSUPP:
+    case SP_EAFNOSUPPORT:
+    case SP_EPROTONOSUPPORT: return SP_ERR_SYS_UNSUPPORTED;
+#if defined(SP_ENOTSUP) && SP_ENOTSUP != SP_EOPNOTSUPP
+    case SP_ENOTSUP:      return SP_ERR_SYS_UNSUPPORTED;
+#endif
+    case SP_ETIMEDOUT:    return SP_ERR_SYS_TIMED_OUT;
+    case SP_ECONNRESET:
+    case SP_ECONNABORTED: return SP_ERR_SYS_CONN_RESET;
+    case SP_ECONNREFUSED: return SP_ERR_SYS_CONN_REFUSED;
+    case SP_ENOTCONN:     return SP_ERR_SYS_NOT_CONNECTED;
+    case SP_EADDRINUSE:   return SP_ERR_SYS_ADDR_IN_USE;
+    case SP_EADDRNOTAVAIL: return SP_ERR_SYS_ADDR_UNAVAILABLE;
+    case SP_ENETDOWN:
+    case SP_ENETUNREACH:
+    case SP_EHOSTUNREACH: return SP_ERR_SYS_UNREACHABLE;
+    case SP_EXDEV:        return SP_ERR_SYS_CROSS_DEVICE;
+    case SP_ELOOP:        return SP_ERR_SYS_LOOP;
+    case SP_EFBIG:        return SP_ERR_SYS_FILE_TOO_BIG;
+    case SP_EINTR:        return SP_ERR_SYS_INTERRUPTED;
+    case SP_ENOTEMPTY:    return SP_ERR_SYS_NOT_EMPTY;
+    case SP_EIO:          return SP_ERR_SYS_IO;
+    case SP_ESPIPE:       return SP_ERR_SYS_UNSEEKABLE;
+    case SP_EMLINK:       return SP_ERR_SYS_TOO_MANY_LINKS;
+    case SP_ENOTTY:       return SP_ERR_SYS_NOT_TTY;
+    default:              return SP_ERR_SYS;
+  }
+}
+
+SP_PRIVATE sp_err_t sp_sys_posix_path(const c8* path, u32 len, c8 buf[SP_PATH_MAX]) {
+  if (len >= SP_PATH_MAX) return SP_ERR_SYS_NAME_TOO_LONG;
+  sp_mem_copy(buf, path, len);
+  buf[len] = 0;
+  return SP_OK;
+}
+#endif
+
+#if defined(SP_MACOS) || defined(SP_COSMO)
+SP_PRIVATE sp_err_t sp_sys_err_from_libc(s32 rc) {
+  return rc ? sp_sys_err_from_errno(errno) : SP_OK;
 }
 #endif
 
 
 #if defined(SP_WIN32)
-SP_PRIVATE void sp_rt_init(void);
-
-#define SP_NT(fn) ((SP_UNLIKELY(!sp_rt.nt.fn) ? sp_tls_once(&sp_rt.tls.once, sp_rt_init) : (void)0), sp_rt.nt.fn)
-
-typedef struct {
-  u8 ReplaceIfExists;
-  u8 _pad[7];
-  void* RootDirectory;
-  u32 FileNameLength;
-  u16 FileName[1];
-} sp_nt_file_rename_information_t;
-
-typedef sp_nt_file_rename_information_t sp_nt_file_link_information_t;
-
 SP_PRIVATE void sp_nt_load(void) {
   HMODULE h = GetModuleHandleW(L"ntdll.dll");
   if (!h) return;
   #define SP_NT_RESOLVE(ret, name, args) \
     sp_rt.nt.name = (ret (__stdcall*) args)(void(*)(void))GetProcAddress(h, #name);
-  SP_NT_FUNCS(SP_NT_RESOLVE)
+  SP_NT_FUNCTIONS(SP_NT_RESOLVE)
   #undef SP_NT_RESOLVE
 }
 
@@ -4550,15 +6650,9 @@ SP_PRIVATE u8* sp_nt_peb_base(void) {
   return peb_base;
 }
 
-SP_PRIVATE void* sp_nt_process_heap(void) {
-  return *(void**)(sp_nt_peb_base() + 0x30);
-}
-
 SP_PRIVATE u8* sp_nt_process_params(void) {
   return *(u8**)(sp_nt_peb_base() + 0x20);
 }
-
-#define SP_NT_OBJECT_NAME_INFORMATION 1
 
 SP_PRIVATE u32 sp_sys_normalize_relative_wtf16(u16* p, u32 len, bool* saw_dotdot) {
   u32 w = 0;
@@ -4612,28 +6706,83 @@ SP_PRIVATE u32 sp_sys_nt_root_end_wtf16(const u16* p, u32 len) {
   return len;
 }
 
+// We used to just use RtlDosPathNameToNtPathName_U_WithStatus for absolute
+// paths. That function, however, enforces the standard DOS 260-character
+// limit on paths, because that is by definition what a DOS path is.
+//
+// Thankfully, Microsoft provided a fix. Simply reach into the PEB, and
+// globally set longPathAware for the process. Just reach right in there.
+// No one was gonna read that flag anyway. Just give it a little flip.
+//
+// Thankfully, the good folks who work on Zig provided a fix. Which is
+// just "build the NT path yourself, minus the insane parts". This code is
+// roughly aped from Zig, and there are a few edge cases it likewise doesn't
+// handle and which are sufficiently rare such that if you don't know about
+// them, you definitely don't care about them.
+//
+// Relative paths are rooted and use NtCreateFile, so they don't run into this
+// constraint by construction.
+SP_PRIVATE sp_nt_status_t sp_sys_nt_from_dos_wtf16(const u16* dos, u32 len, u16* dst, u32 dst_cap, sp_nt_unicode_string_t* out) {
+  static const u16 nt_prefix [] = { '\\', '?', '?', '\\' };
+
+  bool unc = len >= 2 &&
+    (dos[0] == '\\' || dos[0] == '/') &&
+    (dos[1] == '\\' || dos[1] == '/');
+  bool device = unc && len >= 4 &&
+    (dos[2] == '?' || dos[2] == '.') &&
+    (dos[3] == '\\' || dos[3] == '/');
+
+  if (device && dos[0] == '\\' && dos[1] == '\\' && dos[2] == '?' && dos[3] == '\\') {
+    if (len + 1 > dst_cap) return SP_NT_STATUS_NAME_TOO_LONG;
+    sp_mem_copy(dst, nt_prefix, sizeof(nt_prefix));
+    sp_mem_copy(dst + 4, dos + 4, (u64)(len - 4) * sizeof(u16));
+    dst[len] = 0;
+    out->Length = (u16)(len * sizeof(u16));
+    out->MaximumLength = out->Length;
+    out->Buffer = dst;
+    return SP_NT_STATUS_SUCCESS;
+  }
+
+  u32 offset = device ? 0 : (unc ? 6 : 4);
+  if (offset >= dst_cap) return SP_NT_STATUS_NAME_TOO_LONG;
+
+  u32 bytes = SP_NT(RtlGetFullPathName_U)(dos, (dst_cap - offset) * (u32)sizeof(u16), dst + offset, SP_NULLPTR);
+  if (bytes == 0) return SP_NT_STATUS_OBJECT_NAME_INVALID;
+  u32 full = bytes / (u32)sizeof(u16);
+  if (full > dst_cap - offset) return SP_NT_STATUS_NAME_TOO_LONG;
+
+  sp_mem_copy(dst, nt_prefix, sizeof(nt_prefix));
+  if (!device && unc) {
+    dst[4] = 'U';
+    dst[5] = 'N';
+    dst[6] = 'C';
+  }
+
+  out->Length = (u16)((offset + full) * sizeof(u16));
+  out->MaximumLength = out->Length;
+  out->Buffer = dst;
+  return SP_NT_STATUS_SUCCESS;
+}
+
 typedef struct {
   sp_nt_unicode_string_t name;
   HANDLE root;
-  sp_sys_nt_path_t owned;
 } sp_sys_nt_target_t;
 
 SP_PRIVATE sp_nt_status_t sp_sys_nt_target(sp_sys_fd_t root_fd, sp_str_t utf8, u16* result, u32 result_cap, sp_sys_nt_target_t* out) {
   *out = sp_zero_s(sp_sys_nt_target_t);
-  if (sp_str_empty(utf8)) return SP_NT_STATUS_OBJECT_NAME_INVALID;
+  if (sp_str_empty(utf8)) return SP_NT_STATUS_OBJECT_NAME_NOT_FOUND;
+  if (utf8.len >= SP_PATH_MAX) return SP_NT_STATUS_NAME_TOO_LONG;
 
   sp_mem_fixed_t fixed = sp_mem_fixed(result, (u64)result_cap * sizeof(u16));
-  sp_wide_str_t wpath = sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&fixed), utf8);
-  if (!wpath.data) return SP_NT_STATUS_OBJECT_NAME_INVALID;
+  sp_wide_str_t wpath;
+  sp_try_as(sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&fixed), utf8, &wpath), SP_NT_STATUS_OBJECT_NAME_INVALID);
 
   if (sp_fs_is_absolute_w(wpath)) {
-    sp_nt_unicode_string_t nt = sp_zero;
-    u16* file_part = SP_NULLPTR;
-    sp_nt_status_t status = SP_NT(RtlDosPathNameToNtPathName_U_WithStatus)(wpath.data, &nt, &file_part, SP_NULLPTR);
+    u32 used = wpath.len + 1;
+    if (used >= result_cap) return SP_NT_STATUS_NAME_TOO_LONG;
+    sp_nt_status_t status = sp_sys_nt_from_dos_wtf16(wpath.data, wpath.len, result + used, result_cap - used, &out->name);
     if (!SP_NT_SUCCESS(status)) return status;
-    out->owned.name = nt;
-    out->owned.heap_buffer = nt.Buffer;
-    out->name = nt;
     out->root = SP_NULLPTR;
     return SP_NT_STATUS_SUCCESS;
   }
@@ -4674,71 +6823,118 @@ SP_PRIVATE sp_nt_status_t sp_sys_nt_target(sp_sys_fd_t root_fd, sp_str_t utf8, u
   return SP_NT_STATUS_SUCCESS;
 }
 
-SP_PRIVATE void sp_sys_nt_target_free(sp_sys_nt_target_t* t) {
-  sp_sys_nt_path_free(&t->owned);
-}
-
 sp_nt_status_t sp_sys_nt_path(sp_str_t utf8, sp_sys_nt_path_t* out) {
-  *out = sp_zero_s(sp_sys_nt_path_t);
-  if (sp_str_empty(utf8)) return SP_NT_STATUS_OBJECT_NAME_INVALID;
+  out->name = sp_zero_s(sp_nt_unicode_string_t);
+  if (sp_str_empty(utf8)) return SP_NT_STATUS_OBJECT_NAME_NOT_FOUND;
+  if (utf8.len >= SP_PATH_MAX) return SP_NT_STATUS_NAME_TOO_LONG;
 
   SP_ALIGNED u16 wbuf[SP_PATH_MAX + 1];
   sp_mem_fixed_t fixed = sp_mem_fixed(wbuf, sizeof(wbuf));
-  sp_wide_str_t wpath = sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&fixed), utf8);
-  if (!wpath.data) return SP_NT_STATUS_OBJECT_NAME_INVALID;
+  sp_wide_str_t wpath;
+  sp_try_as(sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&fixed), utf8, &wpath), SP_NT_STATUS_OBJECT_NAME_INVALID);
 
-  sp_nt_unicode_string_t nt = sp_zero;
-  u16* file_part = SP_NULLPTR;
-  sp_nt_status_t status = SP_NT(RtlDosPathNameToNtPathName_U_WithStatus)(wpath.data, &nt, &file_part, SP_NULLPTR);
-  if (!SP_NT_SUCCESS(status)) return status;
-
-  out->name = nt;
-  out->heap_buffer = nt.Buffer;
-  return SP_NT_STATUS_SUCCESS;
+  return sp_sys_nt_from_dos_wtf16(wpath.data, wpath.len, out->data, sp_carr_len(out->data), &out->name);
 }
 
-void sp_sys_nt_path_free(sp_sys_nt_path_t* path) {
-  if (!path || !path->heap_buffer) return;
-  SP_NT(RtlFreeHeap)(sp_nt_process_heap(), 0, path->heap_buffer);
-  path->heap_buffer = SP_NULLPTR;
-  path->name = sp_zero_s(sp_nt_unicode_string_t);
+SP_PRIVATE sp_err_t sp_sys_err_from_win32(DWORD e) {
+  switch (e) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:      return SP_ERR_SYS_NOT_FOUND;
+    case ERROR_ACCESS_DENIED:
+    case ERROR_WRITE_PROTECT:       return SP_ERR_SYS_ACCESS_DENIED;
+    case ERROR_FILE_EXISTS:
+    case ERROR_ALREADY_EXISTS:      return SP_ERR_SYS_EXISTS;
+    case ERROR_INVALID_HANDLE:      return SP_ERR_SYS_BAD_FD;
+    case ERROR_SHARING_VIOLATION:   return SP_ERR_SYS_BUSY;
+    case ERROR_INVALID_PARAMETER:   return SP_ERR_SYS_INVALID;
+    case ERROR_DISK_FULL:
+    case ERROR_HANDLE_DISK_FULL:    return SP_ERR_SYS_NO_SPACE;
+    case ERROR_NOT_ENOUGH_MEMORY:
+    case ERROR_OUTOFMEMORY:         return SP_ERR_SYS_NO_MEMORY;
+    case ERROR_TOO_MANY_OPEN_FILES: return SP_ERR_SYS_TOO_MANY_FILES;
+    case ERROR_BUFFER_OVERFLOW:
+    case ERROR_FILENAME_EXCED_RANGE: return SP_ERR_SYS_NAME_TOO_LONG;
+    case ERROR_BROKEN_PIPE:         return SP_ERR_SYS_BROKEN_PIPE;
+    case ERROR_IO_DEVICE:
+    case ERROR_SEEK:                return SP_ERR_SYS_IO;
+    case ERROR_NOT_SUPPORTED:
+    case ERROR_CALL_NOT_IMPLEMENTED: return SP_ERR_SYS_UNSUPPORTED;
+    case ERROR_DIR_NOT_EMPTY:       return SP_ERR_SYS_NOT_EMPTY;
+    case ERROR_DIRECTORY:           return SP_ERR_SYS_NOT_DIR;
+    case ERROR_NOT_SAME_DEVICE:     return SP_ERR_SYS_CROSS_DEVICE;
+    default:                        return SP_ERR_SYS;
+  }
 }
 
-#define SP_NT_FILE_SUPERSEDE    0x00000000
-#define SP_NT_FILE_OPEN         0x00000001
-#define SP_NT_FILE_CREATE       0x00000002
-#define SP_NT_FILE_OPEN_IF      0x00000003
-#define SP_NT_FILE_OVERWRITE    0x00000004
-#define SP_NT_FILE_OVERWRITE_IF 0x00000005
-
-#define SP_NT_FILE_DIRECTORY_FILE              0x00000001
-#define SP_NT_FILE_WRITE_THROUGH               0x00000002
-#define SP_NT_FILE_SEQUENTIAL_ONLY             0x00000004
-#define SP_NT_FILE_NO_INTERMEDIATE_BUFFERING   0x00000008
-#define SP_NT_FILE_SYNCHRONOUS_IO_ALERT        0x00000010
-#define SP_NT_FILE_SYNCHRONOUS_IO_NONALERT     0x00000020
-#define SP_NT_FILE_NON_DIRECTORY_FILE          0x00000040
-#define SP_NT_FILE_OPEN_FOR_BACKUP_INTENT      0x00004000
-#define SP_NT_FILE_DELETE_ON_CLOSE             0x00001000
-#define SP_NT_FILE_OPEN_REPARSE_POINT          0x00200000
-
-#define SP_NT_STATUS_OBJECT_NAME_COLLISION ((sp_nt_status_t)0xC0000035)
-#define SP_NT_STATUS_OBJECT_NAME_NOT_FOUND ((sp_nt_status_t)0xC0000034)
-#define SP_NT_STATUS_OBJECT_PATH_NOT_FOUND ((sp_nt_status_t)0xC000003A)
-#define SP_NT_STATUS_ACCESS_DENIED         ((sp_nt_status_t)0xC0000022)
-
-SP_PRIVATE u32 sp_sys_nt_disposition_from_flags(s32 flags) {
-  if ((flags & SP_O_CREAT) && (flags & SP_O_EXCL))  return SP_NT_FILE_CREATE;
-  if ((flags & SP_O_CREAT) && (flags & SP_O_TRUNC)) return SP_NT_FILE_OVERWRITE_IF;
-  if (flags & SP_O_CREAT)                            return SP_NT_FILE_OPEN_IF;
-  if (flags & SP_O_TRUNC)                            return SP_NT_FILE_OVERWRITE;
-  return SP_NT_FILE_OPEN;
+SP_PRIVATE sp_err_t sp_sys_err_from_wsa(s32 e) {
+  switch (e) {
+    case 0:               return SP_OK;
+    case WSAEWOULDBLOCK:  return SP_ERR_SYS_WOULD_BLOCK;
+    case WSAECONNRESET:
+    case WSAECONNABORTED: return SP_ERR_SYS_CONN_RESET;
+    case WSAECONNREFUSED: return SP_ERR_SYS_CONN_REFUSED;
+    case WSAETIMEDOUT:    return SP_ERR_SYS_TIMED_OUT;
+    case WSAENOTCONN:     return SP_ERR_SYS_NOT_CONNECTED;
+    case WSAEADDRINUSE:   return SP_ERR_SYS_ADDR_IN_USE;
+    case WSAEADDRNOTAVAIL: return SP_ERR_SYS_ADDR_UNAVAILABLE;
+    case WSAENETDOWN:
+    case WSAENETUNREACH:
+    case WSAEHOSTUNREACH: return SP_ERR_SYS_UNREACHABLE;
+    case WSAESHUTDOWN:    return SP_ERR_SYS_BROKEN_PIPE;
+    case WSAENOTSOCK:
+    case WSAEBADF:        return SP_ERR_SYS_BAD_FD;
+    case WSAEACCES:       return SP_ERR_SYS_ACCESS_DENIED;
+    case WSAEINVAL:       return SP_ERR_SYS_INVALID;
+    case WSAEMFILE:       return SP_ERR_SYS_TOO_MANY_FILES;
+    case WSAENOBUFS:      return SP_ERR_SYS_NO_MEMORY;
+    case WSAEOPNOTSUPP:
+    case WSAEAFNOSUPPORT: return SP_ERR_SYS_UNSUPPORTED;
+    default:              return SP_ERR_SYS;
+  }
 }
 
-SP_PRIVATE void* sp_sys_nt_open(sp_sys_fd_t root, sp_str_t utf8, u32 access, u32 share, u32 disposition, u32 options, u32 file_attr) {
+SP_PRIVATE sp_err_t sp_sys_err_from_nt(sp_nt_status_t status) {
+  if (SP_NT_SUCCESS(status)) return SP_OK;
+  switch (status) {
+    case SP_NT_STATUS_OBJECT_NAME_NOT_FOUND:
+    case SP_NT_STATUS_OBJECT_PATH_NOT_FOUND:  return SP_ERR_SYS_NOT_FOUND;
+    case SP_NT_STATUS_OBJECT_NAME_INVALID:    return SP_ERR_SYS_INVALID;
+    case SP_NT_STATUS_NOT_A_DIRECTORY:        return SP_ERR_SYS_NOT_DIR;
+    case SP_NT_STATUS_FILE_IS_A_DIRECTORY:    return SP_ERR_SYS_IS_DIR;
+    case SP_NT_STATUS_OBJECT_NAME_COLLISION:  return SP_ERR_SYS_EXISTS;
+    case SP_NT_STATUS_CANNOT_DELETE:
+    case SP_NT_STATUS_ACCESS_DENIED:          return SP_ERR_SYS_ACCESS_DENIED;
+    case SP_NT_STATUS_SHARING_VIOLATION:
+    case SP_NT_STATUS_DELETE_PENDING:         return SP_ERR_SYS_BUSY;
+    case SP_NT_STATUS_NAME_TOO_LONG:          return SP_ERR_SYS_NAME_TOO_LONG;
+    case SP_NT_STATUS_MEDIA_WRITE_PROTECTED:  return SP_ERR_SYS_READ_ONLY_FS;
+    case SP_NT_STATUS_DISK_FULL:              return SP_ERR_SYS_NO_SPACE;
+    case SP_NT_STATUS_NO_MEMORY:
+    case SP_NT_STATUS_INSUFFICIENT_RESOURCES: return SP_ERR_SYS_NO_MEMORY;
+    case SP_NT_STATUS_TOO_MANY_OPENED_FILES:  return SP_ERR_SYS_TOO_MANY_FILES;
+    case SP_NT_STATUS_DIRECTORY_NOT_EMPTY:    return SP_ERR_SYS_NOT_EMPTY;
+    case SP_NT_STATUS_NOT_SAME_DEVICE:        return SP_ERR_SYS_CROSS_DEVICE;
+    case SP_NT_STATUS_NOT_SUPPORTED:          return SP_ERR_SYS_UNSUPPORTED;
+    case SP_NT_STATUS_INVALID_HANDLE:         return SP_ERR_SYS_BAD_FD;
+    case SP_NT_STATUS_PIPE_CLOSING:
+    case SP_NT_STATUS_PIPE_BROKEN:            return SP_ERR_SYS_BROKEN_PIPE;
+    case SP_NT_STATUS_INVALID_PARAMETER:
+    case SP_NT_STATUS_OBJECT_PATH_SYNTAX_BAD: sp_unreachable_return(SP_ERR_SYS_BUG);
+    default:                                  return SP_ERR_SYS;
+  }
+}
+
+sp_nt_status_t sp_sys_nt_close(sp_sys_fd_t fd) {
+  return SP_NT(NtClose)(sp_ptr_cast(void*, fd));
+}
+
+sp_nt_status_t sp_sys_nt_open(sp_sys_fd_t root, sp_str_t utf8, u32 access, u32 share, u32 disposition, u32 options, u32 file_attr, sp_sys_fd_t* out) {
+  *out = SP_SYS_INVALID_FD;
+
   SP_ALIGNED u16 path_buf[SP_PATH_MAX + 1];
   sp_sys_nt_target_t t;
-  if (!SP_NT_SUCCESS(sp_sys_nt_target(root, utf8, path_buf, SP_PATH_MAX + 1, &t))) return SP_NULLPTR;
+  sp_nt_status_t status = sp_sys_nt_target(root, utf8, path_buf, SP_PATH_MAX + 1, &t);
+  if (!SP_NT_SUCCESS(status)) return status;
 
   sp_nt_object_attributes_t attr = {
     .Length = sizeof(sp_nt_object_attributes_t),
@@ -4749,34 +6945,141 @@ SP_PRIVATE void* sp_sys_nt_open(sp_sys_fd_t root, sp_str_t utf8, u32 access, u32
 
   void* handle = SP_NULLPTR;
   sp_nt_io_status_block_t iosb = sp_zero;
-  sp_nt_status_t status = SP_NT(NtCreateFile)(
+  status = SP_NT(NtCreateFile)(
     &handle, access, &attr, &iosb, SP_NULLPTR,
     file_attr, share, disposition, options, SP_NULLPTR, 0
   );
 
-  sp_sys_nt_target_free(&t);
-
-  if (!SP_NT_SUCCESS(status)) return SP_NULLPTR;
-  return handle;
+  if (SP_NT_SUCCESS(status)) *out = (sp_sys_fd_t)handle;
+  return status;
 }
 
-#define SP_NT_FILE_BASIC_INFORMATION      4
-#define SP_NT_FILE_RENAME_INFORMATION    10
-#define SP_NT_FILE_DISPOSITION_INFORMATION 13
-#define SP_NT_FILE_LINK_INFORMATION      11
+SP_PRIVATE bool sp_sys_nt_needs_legacy_info(sp_nt_status_t status) {
+  return
+    status == SP_NT_STATUS_INVALID_INFO_CLASS ||
+    status == SP_NT_STATUS_INVALID_PARAMETER ||
+    status == SP_NT_STATUS_NOT_SUPPORTED;
+}
 
-typedef struct {
-  s64 CreationTime;
-  s64 LastAccessTime;
-  s64 LastWriteTime;
-  s64 ChangeTime;
-  u32 FileAttributes;
-  u32 Reserved;
-} sp_nt_file_basic_information_t;
+SP_PRIVATE sp_err_t sp_sys_nt_delete(sp_sys_fd_t fd, sp_str_t path, bool dir) {
+  // We have to conform to the lowest common denominator, which in this case
+  // is POSIX. That means that unlink() is for everything except directories,
+  // and rmdir is only for directories.
+  path = sp_fs_trim_path(path);
+  u32 options = SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_REPARSE_POINT;
+  if (dir) options |= SP_NT_FILE_DIRECTORY_FILE;
 
-typedef struct {
-  u8 ReplaceIfExists;
-} sp_nt_file_disposition_information_t;
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(fd, path,
+    DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    SP_NT_FILE_OPEN,
+    options,
+    0,
+    &handle
+  );
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  BY_HANDLE_FILE_INFORMATION info = sp_zero;
+  if (!GetFileInformationByHandle((HANDLE)handle, &info)) {
+    sp_err_t err = sp_sys_err_from_win32(GetLastError());
+    sp_sys_nt_close(handle);
+    return err;
+  }
+  bool reparse = info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT;
+  bool directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !reparse;
+  if (dir && reparse) {
+    sp_sys_nt_close(handle);
+    return SP_ERR_SYS_NOT_DIR;
+  }
+  if (!dir && directory) {
+    sp_sys_nt_close(handle);
+    return SP_ERR_SYS_IS_DIR;
+  }
+
+  // IGNORE_READONLY_ATTRIBUTE is needed because NT refuses to set the delete
+  // disposition on a read-only file; this comes from DOS? Either way, this
+  // flag is what makes the unlink atomic rather than check-then-unlink
+  //
+  // POSIX_SEMANTICS says "remove the name immediately rather than when the
+  // last handle closes".
+  sp_nt_file_disposition_information_ex_t ex = {
+    .Flags =
+      SP_NT_FILE_DISPOSITION_DELETE |
+      SP_NT_FILE_DISPOSITION_POSIX_SEMANTICS |
+      SP_NT_FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE,
+  };
+  sp_nt_io_status_block_t iosb = sp_zero;
+  status = SP_NT(NtSetInformationFile)((void*)handle, &iosb, &ex, sizeof(ex), SP_NT_FILE_DISPOSITION_INFORMATION_EX);
+
+  // If the disposition fails, we can retry with a simpler call that's
+  // supported everywhere but won't delete through a read-only bit:
+  //
+  //   INVALID_PARAMETER means that the filesystem doesn't support information
+  //   class 64 (i.e. the flags word that we just filled in), or more simply it
+  //   doesn't support FileDispositionInformationEx. So like FAT32.
+  //
+  //   INFO_CLASS means that the OS itself doesn't support it (too old)
+  //
+  //   NOT_SUPPORTED means that the IGNORE_READONLY flag isn't supported
+  if (sp_sys_nt_needs_legacy_info(status)) {
+    sp_nt_file_disposition_information_t info = { .DeleteFile = 1 };
+    status = SP_NT(NtSetInformationFile)((void*)handle, &iosb, &info, sizeof(info), SP_NT_FILE_DISPOSITION_INFORMATION);
+  }
+
+  sp_sys_nt_close(handle);
+  return sp_sys_err_from_nt(status);
+}
+
+SP_PRIVATE sp_err_t sp_sys_nt_set_name_info(sp_sys_fd_t from_fd, sp_str_t from, sp_sys_fd_t to_fd, sp_str_t to, u32 access, u32 flags, u32 info_class, u32 legacy_info_class) {
+  SP_ALIGNED u16 path_buf [SP_PATH_MAX + 1];
+  SP_ALIGNED u8 info_buf [sizeof(sp_nt_file_rename_information_t) + SP_PATH_MAX * sizeof(u16)];
+
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(from_fd, from,
+    access,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    SP_NT_FILE_OPEN,
+    SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_REPARSE_POINT,
+    SP_NT_NO_OPTIONS,
+    &handle
+  );
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  sp_sys_nt_target_t t;
+  status = sp_sys_nt_target(to_fd, to, path_buf, SP_PATH_MAX + 1, &t);
+  if (!SP_NT_SUCCESS(status)) {
+    sp_sys_nt_close(handle);
+    return sp_sys_err_from_nt(status);
+  }
+
+  u32 name_bytes = t.name.Length;
+  u32 info_bytes = sizeof(sp_nt_file_rename_information_t) + name_bytes - sizeof(u16);
+  if (info_bytes > sizeof(info_buf)) {
+    sp_sys_nt_close(handle);
+    return SP_ERR_SYS_NAME_TOO_LONG;
+  }
+
+  sp_nt_file_rename_information_t* info = (sp_nt_file_rename_information_t*)info_buf;
+  *info = sp_zero_s(sp_nt_file_rename_information_t);
+  info->Flags = flags;
+  info->RootDirectory = t.root;
+  info->FileNameLength = name_bytes;
+  sp_mem_copy(info->FileName, t.name.Buffer, name_bytes);
+
+  sp_nt_io_status_block_t iosb = sp_zero;
+  status = SP_NT(NtSetInformationFile)((void*)handle, &iosb, info, info_bytes, info_class);
+
+  if (legacy_info_class && sp_sys_nt_needs_legacy_info(status)) {
+    info->Flags = 0;
+    info->ReplaceIfExists = 1;
+    status = SP_NT(NtSetInformationFile)((void*)handle, &iosb, info, info_bytes, legacy_info_class);
+  }
+
+  sp_sys_nt_close(handle);
+
+  return sp_sys_err_from_nt(status);
+}
 
 static void sp_sys_timespec_from_filetime(FILETIME ft, sp_sys_timespec_t* out) {
   u64 t = ((u64)ft.dwHighDateTime << 32) | (u64)ft.dwLowDateTime;
@@ -4790,48 +7093,50 @@ static void sp_sys_timespec_from_filetime(FILETIME ft, sp_sys_timespec_t* out) {
   }
 }
 
-static s32 sp_sys_file_meta_from_nt_handle(HANDLE handle, sp_sys_file_meta_t* out) {
-  BY_HANDLE_FILE_INFORMATION info;
-  if (!GetFileInformationByHandle(handle, &info)) return -1;
-
-  sp_sys_file_meta_t st = sp_zero;
-
-  if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
-    st.kind = SP_FS_KIND_SYMLINK;
-  } else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-    st.kind = SP_FS_KIND_DIR;
-  } else {
-    st.kind = SP_FS_KIND_FILE;
-  }
-
-  st.size      = (s64)(((u64)info.nFileSizeHigh << 32) | (u64)info.nFileSizeLow);
-  st.id        = ((u64)info.nFileIndexHigh << 32) | (u64)info.nFileIndexLow;
-  st.device    = info.dwVolumeSerialNumber;
-  st.nlink     = info.nNumberOfLinks;
-  st.raw_attrs = info.dwFileAttributes;
-
-  sp_sys_timespec_from_filetime(info.ftLastAccessTime, &st.atime);
-  sp_sys_timespec_from_filetime(info.ftLastWriteTime,  &st.mtime);
-  sp_sys_timespec_from_filetime(info.ftCreationTime,   &st.btime);
-
-  *out = st;
-  return 0;
-}
-
-static s32 sp_sys_file_meta_from_nt_path(sp_sys_fd_t root, sp_str_t path, sp_sys_file_meta_t* out, bool follow_symlinks) {
+static sp_err_t sp_sys_file_meta_from_nt_path(sp_sys_fd_t dir, sp_str_t path, sp_sys_file_meta_t* out, bool follow_symlinks) {
+  sp_str_t trimmed = sp_fs_trim_path(path);
+  bool trailing = trimmed.len != path.len;
+  path = trimmed;
   u32 options = SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT;
-  if (!follow_symlinks) options |= SP_NT_FILE_OPEN_REPARSE_POINT;
-  void* h = sp_sys_nt_open(
-    root,
+  if (!follow_symlinks && !trailing) options |= SP_NT_FILE_OPEN_REPARSE_POINT;
+  sp_sys_fd_t fd = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(
+    dir,
     path,
     FILE_READ_ATTRIBUTES | SYNCHRONIZE,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-    SP_NT_FILE_OPEN, options, 0
+    SP_NT_FILE_OPEN, options, 0, &fd
   );
-  if (!h) return -1;
-  s32 rc = sp_sys_file_meta_from_nt_handle((HANDLE)h, out);
-  SP_NT(NtClose)(h);
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+  sp_err_t rc = sp_sys_get_file_metadata_p(fd, out);
+  sp_sys_nt_close(fd);
+  if (!rc && trailing && out->kind != SP_FS_KIND_DIR) return SP_ERR_SYS_NOT_DIR;
   return rc;
+}
+
+#define SP_SYS_WIN32_IO_MAX 0x7ffff000u
+
+SP_PRIVATE DWORD sp_sys_win32_io_count(u64 count) {
+  return count > SP_SYS_WIN32_IO_MAX ? SP_SYS_WIN32_IO_MAX : (DWORD)count;
+}
+
+SP_PRIVATE sp_err_t sp_sys_tty_err_from_win32(DWORD err) {
+  if (err == ERROR_INVALID_HANDLE) return SP_ERR_SYS_NOT_TTY;
+  return sp_sys_err_from_win32(err);
+}
+#endif
+
+#if defined(SP_MACOS) || defined(SP_COSMO)
+// Linux clamps automatically, but macOS just errors with EINVAL if we pass more than INT_MAX
+#define SP_SYS_POSIX_IO_MAX 0x7ffff000u
+
+SP_PRIVATE size_t sp_sys_posix_io_count(u64 count) {
+  return count > SP_SYS_POSIX_IO_MAX ? SP_SYS_POSIX_IO_MAX : (size_t)count;
+}
+
+SP_PRIVATE u32 sp_sys_posix_trim_slashes(const c8* path, u32 len) {
+  while (len > 1 && path[len - 1] == '/') len--;
+  return len;
 }
 #endif
 
@@ -4839,26 +7144,79 @@ static s32 sp_sys_file_meta_from_nt_path(sp_sys_fd_t root, sp_str_t path, sp_sys
 //////////////////////////////
 // SP_SYS_GET_FILE_METADATA //
 //////////////////////////////
-s32 sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_get_file_metadata_p(sp_sys_fd_t fd, sp_sys_file_meta_t* meta) {
 #if defined(SP_WIN32)
-  if (fd == SP_SYS_INVALID_FD) return -1;
-  return sp_sys_file_meta_from_nt_handle((HANDLE)fd, st);
+  BY_HANDLE_FILE_INFORMATION info;
+  if (!GetFileInformationByHandle(sp_ptr_cast(HANDLE, fd), &info)) {
+    switch (GetLastError()) {
+      case ERROR_ACCESS_DENIED: return SP_ERR_SYS_ACCESS_DENIED;
+      case ERROR_INVALID_HANDLE:
+      case ERROR_INVALID_PARAMETER: sp_unreachable_return(SP_ERR_SYS_BUG);
+      default: return SP_ERR_SYS;
+    }
+  }
+
+  if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+    // @spader This is very wrong but just right enough to be usable. The right
+    // thing to do is call GetFileInformationByHandleEx(), which returns the
+    // reparse kind (unlike the existing call) and handle the different cases
+    // (e.g. OneDrive links), of which symlinks are one.
+    meta->kind = SP_FS_KIND_SYMLINK;
+  } else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+    meta->kind = SP_FS_KIND_DIR;
+  } else {
+    meta->kind = SP_FS_KIND_FILE;
+  }
+
+  struct { u64 high; u64 low; } size = {
+    sp_cast(u64, info.nFileSizeHigh) << 32,
+    info.nFileSizeLow,
+  };
+  meta->size = sp_cast(s64, (size.high | size.low));
+
+  struct { u64 high; u64 low; } id = {
+    sp_cast(u64, info.nFileIndexHigh) << 32,
+    info.nFileIndexLow,
+  };
+  meta->id = sp_cast(s64, (id.high | id.low));
+  meta->device = info.dwVolumeSerialNumber;
+  meta->nlink = info.nNumberOfLinks;
+  meta->raw_attrs = info.dwFileAttributes;
+
+  sp_sys_timespec_from_filetime(info.ftLastAccessTime, &meta->atime);
+  sp_sys_timespec_from_filetime(info.ftLastWriteTime, &meta->mtime);
+  sp_sys_timespec_from_filetime(info.ftCreationTime, &meta->btime);
+
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  sp_sys_linux_stat_t raw = sp_zero;
-  s32 rc = (s32)sp_syscall(SP_SYSCALL_NUM_FSTAT, fd, &raw);
-  if (rc == 0) sp_sys_file_meta_from_linux(&raw, st);
-  return rc;
+  sp_sys_linux_statx_t stx = sp_zero;
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_STATX, fd, "", SP_AT_EMPTY_PATH, SP_SYS_LINUX_STATX_BASIC_STATS | SP_SYS_LINUX_STATX_BTIME, &stx);
+  if (rc < 0) {
+    switch (-rc) {
+      case SP_EFAULT:
+      case SP_EINVAL: sp_unreachable_return(SP_ERR_SYS_BUG);
+      default: return sp_sys_err_from_errno(-rc);
+    }
+  }
+  sp_sys_file_meta_from_statx(&stx, meta);
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   struct stat native;
-  s32 rc = fstat(fd, &native);
-  if (rc == 0) sp_sys_file_meta_from_libc(&native, st);
-  return rc;
+  if (fstat(fd, &native)) {
+    switch (errno) {
+      case EFAULT:
+      case EINVAL: sp_unreachable_return(SP_ERR_SYS_BUG);
+      default:     return sp_sys_err_from_errno(errno);
+    }
+  }
+  sp_sys_file_meta_from_libc(&native, meta);
+  return SP_OK;
 
 #elif defined(SP_WASM)
-  (void)fd; (void)st;
-  return -1;
+  (void)fd; (void)meta;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_get_file_metadata"
@@ -4869,96 +7227,78 @@ s32 sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st) {
 ///////////////////
 // SP_SYS_RENAME //
 ///////////////////
-s32 sp_sys_rename(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* to, u32 to_len) {
+sp_err_t sp_sys_rename_p(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* to, u32 to_len) {
 #if defined(SP_WIN32)
-  void* handle = sp_sys_nt_open(
-    from_fd,
-    sp_str(from, from_len),
+  return sp_sys_nt_set_name_info(
+    from_fd, sp_str(from, from_len),
+    to_fd, sp_str(to, to_len),
     DELETE | SYNCHRONIZE,
-    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-    SP_NT_FILE_OPEN,
-    SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_REPARSE_POINT,
-    0
+    SP_NT_FILE_RENAME_REPLACE_IF_EXISTS | SP_NT_FILE_RENAME_POSIX_SEMANTICS |
+    SP_NT_FILE_RENAME_IGNORE_READONLY_ATTRIBUTE,
+    SP_NT_FILE_RENAME_INFORMATION_EX,
+    SP_NT_FILE_RENAME_INFORMATION
   );
-  if (!handle) return -1;
-
-  SP_ALIGNED u16 path_buf[SP_PATH_MAX + 1];
-  sp_sys_nt_target_t t;
-  if (!SP_NT_SUCCESS(sp_sys_nt_target(to_fd, sp_str(to, to_len), path_buf, SP_PATH_MAX + 1, &t))) {
-    SP_NT(NtClose)(handle);
-    return -1;
-  }
-
-  u32 name_bytes = t.name.Length;
-  u32 info_bytes = sizeof(sp_nt_file_rename_information_t) + name_bytes - sizeof(u16);
-  SP_ALIGNED u8 info_buf[sizeof(sp_nt_file_rename_information_t) + SP_PATH_MAX * sizeof(u16)];
-  if (info_bytes > sizeof(info_buf)) {
-    sp_sys_nt_target_free(&t);
-    SP_NT(NtClose)(handle);
-    return -1;
-  }
-  sp_nt_file_rename_information_t* info = (sp_nt_file_rename_information_t*)info_buf;
-  *info = sp_zero_s(sp_nt_file_rename_information_t);
-  info->ReplaceIfExists = 1;
-  info->RootDirectory = t.root;
-  info->FileNameLength = name_bytes;
-  sp_mem_copy(info->FileName, t.name.Buffer, name_bytes);
-
-  sp_nt_io_status_block_t iosb = sp_zero;
-  sp_nt_status_t status = SP_NT(NtSetInformationFile)(handle, &iosb, info, info_bytes, SP_NT_FILE_RENAME_INFORMATION);
-
-  sp_sys_nt_target_free(&t);
-  SP_NT(NtClose)(handle);
-
-  return SP_NT_SUCCESS(status) ? 0 : -1;
 
 #elif defined(SP_LINUX)
   struct {
     c8 from [SP_PATH_MAX];
     c8 to [SP_PATH_MAX];
-  } buffers = sp_zero;
-  sp_cstr_copy_to_n(from, from_len, buffers.from, SP_PATH_MAX);
-  sp_cstr_copy_to_n(to, to_len, buffers.to, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_RENAMEAT, from_fd, buffers.from, to_fd, buffers.to);
+  } buffers;
+  sp_try(sp_sys_posix_path(from, from_len, buffers.from));
+  sp_try(sp_sys_posix_path(to, to_len, buffers.to));
+  return sp_syscall_e(SP_SYSCALL_NUM_RENAMEAT, from_fd, buffers.from, to_fd, buffers.to);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   struct {
     c8 from [SP_PATH_MAX];
     c8 to [SP_PATH_MAX];
-  } buffers = sp_zero;
-  sp_cstr_copy_to_n(from, from_len, buffers.from, SP_PATH_MAX);
-  sp_cstr_copy_to_n(to, to_len, buffers.to, SP_PATH_MAX);
-  return renameat((int)from_fd, buffers.from, (int)to_fd, buffers.to);
+  } buffers;
+  sp_try(sp_sys_posix_path(from, from_len, buffers.from));
+  sp_try(sp_sys_posix_path(to, to_len, buffers.to));
+  return sp_sys_err_from_libc(renameat(from_fd, buffers.from, to_fd, buffers.to));
 
 #elif defined(SP_WASM)
   (void)from_fd; (void)from; (void)from_len; (void)to_fd; (void)to; (void)to_len;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_rename"
 #endif
 }
 
-s32 sp_sys_rename_s(sp_sys_fd_t from_fd, sp_str_t from, sp_sys_fd_t to_fd, sp_str_t to) {
+sp_err_t sp_sys_rename_s(sp_sys_fd_t from_fd, sp_str_t from, sp_sys_fd_t to_fd, sp_str_t to) {
   return sp_sys_rename(from_fd, from.data, from.len, to_fd, to.data, to.len);
 }
 
 //////////////////
 // SP_SYS_CLOSE //
 //////////////////
-s32 sp_sys_close(sp_sys_fd_t fd) {
+sp_err_t sp_sys_close_p(sp_sys_fd_t fd) {
 #if defined(SP_WIN32)
-  if (fd == SP_SYS_INVALID_FD) return -1;
-  return CloseHandle((HANDLE)fd) ? 0 : -1;
+  if (fd == SP_SYS_INVALID_FD) return SP_ERR_SYS_BAD_FD;
+  if (!CloseHandle((HANDLE)fd)) return sp_sys_err_from_win32(GetLastError());
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  return close(fd);
+  if (close(fd)) {
+    switch (errno) {
+      case SP_EINTR:
+      case SP_EINPROGRESS: return SP_OK;
+      default:             return sp_sys_err_from_errno(errno);
+    }
+  }
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  return (s32)sp_syscall(SP_SYSCALL_NUM_CLOSE, fd);
+  s64 rc = sp_syscall_r(SP_SYSCALL_NUM_CLOSE, fd);
+  switch (rc) {
+    case SP_EINTR:
+    case SP_EINPROGRESS: return SP_OK;
+    default:             return sp_sys_err_from_errno(rc);
+  }
 
 #elif defined(SP_WASM)
-  return __wasi_fd_close(fd) ? -1 : 0;
+  return sp_sys_err_from_wasi(__wasi_fd_close(fd));
 
 #else
   #error "sp_sys_close"
@@ -4968,81 +7308,370 @@ s32 sp_sys_close(sp_sys_fd_t fd) {
 /////////////////
 // SP_SYS_PIPE //
 /////////////////
-s32 sp_sys_pipe(sp_sys_fd_t* read_end, sp_sys_fd_t* write_end) {
 #if defined(SP_WIN32)
-  HANDLE r = SP_NULLPTR;
-  HANDLE w = SP_NULLPTR;
-  SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), SP_NULLPTR, FALSE };
-  if (!CreatePipe(&r, &w, &sa, 0)) return -1;
-  DWORD mode = PIPE_NOWAIT;
-  if (!SetNamedPipeHandleState(r, &mode, SP_NULLPTR, SP_NULLPTR)) {
-    CloseHandle(r);
-    CloseHandle(w);
-    return -1;
+SP_PRIVATE sp_err_t sp_sys_win32_pipe_device(void** out) {
+  void* device = sp_atomic_ptr_load(&sp_rt.pipe_device, SP_ATOMIC_ACQUIRE);
+  if (device) {
+    *out = device;
+    return SP_OK;
   }
-  *read_end = (sp_sys_fd_t)r;
-  *write_end = (sp_sys_fd_t)w;
-  return 0;
+
+  static u16 path [] = { '\\', 'D', 'e', 'v', 'i', 'c', 'e', '\\', 'N', 'a', 'm', 'e', 'd', 'P', 'i', 'p', 'e', '\\' };
+  sp_nt_unicode_string_t name = {
+    .Length = sizeof(path),
+    .MaximumLength = sizeof(path),
+    .Buffer = path,
+  };
+  sp_nt_object_attributes_t attr = {
+    .Length = sizeof(sp_nt_object_attributes_t),
+    .ObjectName = &name,
+    .Attributes = SP_NT_OBJ_CASE_INSENSITIVE,
+  };
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtOpenFile)(
+    &device,
+    GENERIC_READ | SYNCHRONIZE,
+    &attr, &iosb,
+    FILE_SHARE_READ | FILE_SHARE_WRITE,
+    SP_NT_FILE_SYNCHRONOUS_IO_NONALERT
+  );
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  if (!sp_atomic_ptr_cas(&sp_rt.pipe_device, SP_NULLPTR, device, SP_ATOMIC_ACQ_REL)) {
+    SP_NT(NtClose)(device);
+    device = sp_atomic_ptr_load(&sp_rt.pipe_device, SP_ATOMIC_ACQUIRE);
+  }
+  *out = device;
+  return SP_OK;
+}
+
+typedef enum {
+  SP_SYS_WIN32_PIPE_SYNCHRONOUS,
+  SP_SYS_WIN32_PIPE_OVERLAPPED,
+} sp_sys_win32_pipe_io_t;
+
+typedef struct {
+  sp_sys_win32_pipe_io_t io;
+  sp_sys_inherited_t inherited;
+} sp_sys_win32_pipe_end_t;
+
+typedef struct {
+  sp_sys_win32_pipe_end_t r;
+  sp_sys_win32_pipe_end_t w;
+} sp_sys_win32_pipe_desc_t;
+
+SP_PRIVATE sp_err_t sp_sys_win32_pipe(sp_sys_pipe_t* out, sp_sys_win32_pipe_desc_t desc) {
+  out->r = SP_SYS_INVALID_FD;
+  out->w = SP_SYS_INVALID_FD;
+
+  void* device = SP_NULLPTR;
+  sp_err_t err = sp_sys_win32_pipe_device(&device);
+  if (err != SP_OK) return err;
+
+  sp_nt_unicode_string_t name = sp_zero;
+  sp_nt_object_attributes_t attr = {
+    .Length = sizeof(sp_nt_object_attributes_t),
+    .RootDirectory = device,
+    .ObjectName = &name,
+    .Attributes = (u32)(SP_NT_OBJ_CASE_INSENSITIVE | (desc.r.inherited == SP_SYS_INHERITED ? SP_NT_OBJ_INHERIT : 0)),
+  };
+  u32 options = desc.r.io == SP_SYS_WIN32_PIPE_SYNCHRONOUS ? SP_NT_FILE_SYNCHRONOUS_IO_NONALERT : 0;
+
+  // NtCreateNamedPipeFile requires a default timeout; it only governs pipe
+  // waits, which anonymous pipes never issue. 50ms relative is the convention.
+  s64 timeout = -500000;
+
+  void* read_end = SP_NULLPTR;
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtCreateNamedPipeFile)(
+    &read_end,
+    GENERIC_READ | SYNCHRONIZE,
+    &attr, &iosb,
+    FILE_SHARE_READ | FILE_SHARE_WRITE,
+    SP_NT_FILE_CREATE,
+    options,
+    SP_NT_FILE_PIPE_BYTE_STREAM_TYPE,
+    SP_NT_FILE_PIPE_BYTE_STREAM_MODE,
+    SP_NT_FILE_PIPE_QUEUE_OPERATION,
+    1,
+    64 * 1024,
+    64 * 1024,
+    &timeout
+  );
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  attr.RootDirectory = read_end;
+  attr.Attributes = SP_NT_OBJ_CASE_INSENSITIVE | (desc.w.inherited == SP_SYS_INHERITED ? SP_NT_OBJ_INHERIT : 0);
+  options = SP_NT_FILE_NON_DIRECTORY_FILE;
+  if (desc.w.io == SP_SYS_WIN32_PIPE_SYNCHRONOUS) options |= SP_NT_FILE_SYNCHRONOUS_IO_NONALERT;
+
+  void* write_end = SP_NULLPTR;
+  status = SP_NT(NtOpenFile)(
+    &write_end,
+    GENERIC_WRITE | SYNCHRONIZE,
+    &attr, &iosb,
+    FILE_SHARE_READ | FILE_SHARE_WRITE,
+    options
+  );
+  if (!SP_NT_SUCCESS(status)) {
+    SP_NT(NtClose)(read_end);
+    return sp_sys_err_from_nt(status);
+  }
+
+  out->r = (sp_sys_fd_t)read_end;
+  out->w = (sp_sys_fd_t)write_end;
+  return SP_OK;
+}
+#endif
+
+sp_err_t sp_sys_pipe_p(sp_sys_pipe_t* out, sp_sys_pipe_desc_t desc) {
+  out->r = SP_SYS_INVALID_FD;
+  out->w = SP_SYS_INVALID_FD;
+
+#if defined(SP_WIN32)
+  return sp_sys_win32_pipe(out, (sp_sys_win32_pipe_desc_t) {
+    .r = { .inherited = desc.r },
+    .w = { .inherited = desc.w },
+  });
 
 #elif defined(SP_LINUX)
   s32 fds[2];
-  s32 r = (s32)sp_syscall(SP_SYSCALL_NUM_PIPE2, fds, SP_O_NONBLOCK | SP_O_CLOEXEC, 0, 0, 0);
-  if (r < 0) return -1;
-  *read_end = fds[0];
-  *write_end = fds[1];
-  return 0;
+  s64 r = sp_syscall(SP_SYSCALL_NUM_PIPE2, fds, SP_SYS_LINUX_O_CLOEXEC, 0, 0, 0);
+  if (r < 0) return sp_sys_err_from_errno(-r);
+  if (desc.r == SP_SYS_INHERITED) sp_syscall(SP_SYSCALL_NUM_FCNTL, fds[0], SP_F_SETFD, 0);
+  if (desc.w == SP_SYS_INHERITED) sp_syscall(SP_SYSCALL_NUM_FCNTL, fds[1], SP_F_SETFD, 0);
+  out->r = fds[0];
+  out->w = fds[1];
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   s32 fds[2];
-  if (pipe(fds) < 0) return -1;
-  fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK);
-  fcntl(fds[0], F_SETFD, fcntl(fds[0], F_GETFD) | FD_CLOEXEC);
-  fcntl(fds[1], F_SETFD, fcntl(fds[1], F_GETFD) | FD_CLOEXEC);
-  *read_end = fds[0];
-  *write_end = fds[1];
-  return 0;
+  if (pipe(fds) < 0) return sp_sys_err_from_errno(errno);
+  if (desc.r == SP_SYS_NOT_INHERITED) fcntl(fds[0], F_SETFD, fcntl(fds[0], F_GETFD) | FD_CLOEXEC);
+  if (desc.w == SP_SYS_NOT_INHERITED) fcntl(fds[1], F_SETFD, fcntl(fds[1], F_GETFD) | FD_CLOEXEC);
+  out->r = fds[0];
+  out->w = fds[1];
+  return SP_OK;
 
 #elif defined(SP_WASM)
-  *read_end = SP_SYS_INVALID_FD;
-  *write_end = SP_SYS_INVALID_FD;
-  return -1;
+  (void)desc;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_pipe"
 #endif
 }
 
+sp_err_t sp_sys_pipe_ready_p(sp_sys_fd_t fd, u8* ready) {
+  *ready = 0;
+
+#if defined(SP_WIN32)
+  DWORD avail = 0;
+  if (!PeekNamedPipe((HANDLE)fd, SP_NULLPTR, 0, SP_NULLPTR, &avail, SP_NULLPTR)) {
+    DWORD err = GetLastError();
+    // A broken pipe is readable: the read returns EOF instead of blocking
+    if (err == ERROR_BROKEN_PIPE) {
+      *ready = 1;
+      return SP_OK;
+    }
+    return sp_sys_err_from_win32(err);
+  }
+  if (avail > 0) *ready = 1;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  sp_sys_linux_pollfd_t pfd = { .fd = fd, .events = SP_SYS_LINUX_POLLIN };
+  sp_sys_timespec_t ts = sp_zero;
+  s64 r = sp_syscall_retry(SP_SYSCALL_NUM_PPOLL, &pfd, 1, &ts, 0, 0);
+  if (r < 0) return sp_sys_err_from_errno(-r);
+  if (r > 0 && (pfd.revents & (SP_SYS_LINUX_POLLIN | SP_SYS_LINUX_POLLHUP | SP_SYS_LINUX_POLLERR))) *ready = 1;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct pollfd pfd = { .fd = fd, .events = POLLIN };
+  s32 r;
+  do {
+    r = (s32)poll(&pfd, 1, 0);
+  } while (r < 0 && errno == EINTR);
+  if (r < 0) return sp_sys_err_from_errno(errno);
+  if (r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) *ready = 1;
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  __wasi_subscription_t subs [2] = {
+    {
+      .userdata = 0,
+      .u = {
+        .tag = __WASI_EVENTTYPE_FD_READ,
+        .u = { .fd_read = { .file_descriptor = (__wasi_fd_t)fd } },
+      },
+    },
+    {
+      .userdata = 1,
+      .u = {
+        .tag = __WASI_EVENTTYPE_CLOCK,
+        .u = { .clock = { .id = 1, .timeout = 0, .precision = 0, .flags = 0 } },
+      },
+    },
+  };
+  __wasi_event_t events [2];
+  __wasi_size_t nev = 0;
+  __wasi_errno_t err = __wasi_poll_oneoff(subs, events, 2, &nev);
+  if (err) return sp_sys_err_from_wasi(err);
+  for (__wasi_size_t i = 0; i < nev; i++) {
+    if (events[i].userdata == 0) {
+      *ready = 1;
+      return SP_OK;
+    }
+  }
+  return SP_OK;
+
+#else
+  #error "sp_sys_pipe_ready"
+#endif
+}
+
+//////////////////
+// SP_SYS_EVENT //
+//////////////////
+sp_err_t sp_sys_event_open_p(sp_sys_event_t* out) {
+  out->fd = SP_SYS_INVALID_FD;
+
+#if defined(SP_WIN32)
+  // Manual reset so a wait observes the event without consuming it, matching poll
+  HANDLE h = CreateEventW(SP_NULLPTR, true, false, SP_NULLPTR);
+  if (h == SP_NULLPTR) return sp_sys_err_from_win32(GetLastError());
+  out->fd = (sp_sys_fd_t)h;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  // EFD_CLOEXEC and EFD_NONBLOCK are numerically O_CLOEXEC and O_NONBLOCK
+  s64 r = sp_syscall(SP_SYSCALL_NUM_EVENTFD2, 0, SP_SYS_LINUX_O_CLOEXEC | SP_SYS_LINUX_O_NONBLOCK);
+  if (r < 0) return sp_sys_err_from_errno(-r);
+  out->fd = (sp_sys_fd_t)r;
+  return SP_OK;
+
+#elif defined(SP_MACOS)
+  s32 kq = kqueue();
+  if (kq < 0) return sp_sys_err_from_errno(errno);
+  struct kevent change;
+  EV_SET(&change, 0, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, SP_NULLPTR);
+  if (kevent(kq, &change, 1, SP_NULLPTR, 0, SP_NULLPTR) < 0) {
+    sp_err_t err = sp_sys_err_from_errno(errno);
+    close(kq);
+    return err;
+  }
+  out->fd = kq;
+  return SP_OK;
+
+#elif defined(SP_COSMO) || defined(SP_WASM)
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_event_open"
+#endif
+}
+
+sp_err_t sp_sys_event_signal_p(sp_sys_event_t event) {
+#if defined(SP_WIN32)
+  if (!SetEvent((HANDLE)event.fd)) return sp_sys_err_from_win32(GetLastError());
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  u64 one = 1;
+  s64 r = sp_syscall_retry(SP_SYSCALL_NUM_WRITE, event.fd, &one, sizeof(one));
+  // EAGAIN means the counter is saturated, i.e. already signaled
+  if (r == -SP_EAGAIN) return SP_OK;
+  if (r < 0) return sp_sys_err_from_errno(-r);
+  return SP_OK;
+
+#elif defined(SP_MACOS)
+  struct kevent change;
+  EV_SET(&change, 0, EVFILT_USER, 0, NOTE_TRIGGER, 0, SP_NULLPTR);
+  if (kevent(event.fd, &change, 1, SP_NULLPTR, 0, SP_NULLPTR) < 0) return sp_sys_err_from_errno(errno);
+  return SP_OK;
+
+#elif defined(SP_COSMO) || defined(SP_WASM)
+  (void)event;
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_event_signal"
+#endif
+}
+
+sp_err_t sp_sys_event_clear_p(sp_sys_event_t event) {
+#if defined(SP_WIN32)
+  if (!ResetEvent((HANDLE)event.fd)) return sp_sys_err_from_win32(GetLastError());
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  u64 value = 0;
+  s64 r = sp_syscall_retry(SP_SYSCALL_NUM_READ, event.fd, &value, sizeof(value));
+  // EAGAIN means the counter is zero, i.e. already clear
+  if (r == -SP_EAGAIN) return SP_OK;
+  if (r < 0) return sp_sys_err_from_errno(-r);
+  return SP_OK;
+
+#elif defined(SP_MACOS)
+  struct kevent ev;
+  struct timespec ts = sp_zero;
+  if (kevent(event.fd, SP_NULLPTR, 0, &ev, 1, &ts) < 0) return sp_sys_err_from_errno(errno);
+  return SP_OK;
+
+#elif defined(SP_COSMO) || defined(SP_WASM)
+  (void)event;
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_event_clear"
+#endif
+}
+
 //////////////////
 // SP_SYS_READ //
 //////////////////
-s64 sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count) {
+sp_err_t sp_sys_read_p(sp_sys_fd_t fd, void* buf, u64 count, u64* bytes_read) {
+  if (bytes_read) *bytes_read = 0;
+
 #if defined(SP_WIN32)
-  DWORD n = 0;
-  if (!ReadFile((HANDLE)fd, buf, (DWORD)count, &n, SP_NULLPTR)) {
-    if (GetLastError() == ERROR_BROKEN_PIPE) return 0;
-    return -1;
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtReadFile)((void*)fd, SP_NULLPTR, SP_NULLPTR, SP_NULLPTR, &iosb, buf, sp_sys_win32_io_count(count), SP_NULLPTR, SP_NULLPTR);
+  if (status == SP_NT_STATUS_PENDING) {
+    sp_nt_status_t wait = SP_NT(NtWaitForSingleObject)((void*)fd, 0, SP_NULLPTR);
+    status = SP_NT_SUCCESS(wait) ? iosb.Status : wait;
   }
-  return (s64)n;
+  if (!SP_NT_SUCCESS(status)) {
+    if (status == SP_NT_STATUS_END_OF_FILE || status == SP_NT_STATUS_PIPE_BROKEN) return SP_OK;
+    if (status == SP_NT_STATUS_ACCESS_DENIED) return SP_ERR_SYS_BAD_FD;
+    return sp_sys_err_from_nt(status);
+  }
+  if (bytes_read) *bytes_read = (u64)iosb.Information;
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  s64 rc;
-  do {
-    rc = sp_syscall(SP_SYSCALL_NUM_READ, fd, buf, count);
-  } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_READ, fd, buf, count);
+  if (sp_sys_is_err(rc)) return sp_sys_err_from_errno(-rc);
+
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   s64 rc;
   do {
-    rc = read(fd, buf, count);
+    rc = read(fd, buf, sp_sys_posix_io_count(count));
   } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_WASM)
   __wasi_iovec_t iov = { (uint8_t*)buf, (__wasi_size_t)count };
   __wasi_size_t n = 0;
   __wasi_errno_t err = __wasi_fd_read((__wasi_fd_t)fd, &iov, 1, &n);
-  return err ? -1 : (s64)n;
+  if (err) return sp_sys_err_from_wasi(err);
+  if (bytes_read) *bytes_read = (u64)n;
+  return SP_OK;
 
 #else
   #error "sp_sys_read"
@@ -5052,31 +7681,45 @@ s64 sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count) {
 ///////////////////
 // SP_SYS_WRITE //
 ///////////////////
-s64 sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count) {
+sp_err_t sp_sys_write_p(sp_sys_fd_t fd, const void* buf, u64 count, u64* bytes_written) {
+  if (bytes_written) *bytes_written = 0;
+
 #if defined(SP_WIN32)
-  DWORD n = 0;
-  if (!WriteFile((HANDLE)fd, buf, (DWORD)count, &n, SP_NULLPTR)) return -1;
-  return (s64)n;
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtWriteFile)((void*)fd, SP_NULLPTR, SP_NULLPTR, SP_NULLPTR, &iosb, buf, sp_sys_win32_io_count(count), SP_NULLPTR, SP_NULLPTR);
+  if (status == SP_NT_STATUS_PENDING) {
+    sp_nt_status_t wait = SP_NT(NtWaitForSingleObject)((void*)fd, 0, SP_NULLPTR);
+    status = SP_NT_SUCCESS(wait) ? iosb.Status : wait;
+  }
+  if (!SP_NT_SUCCESS(status)) {
+    if (status == SP_NT_STATUS_ACCESS_DENIED) return SP_ERR_SYS_BAD_FD;
+    return sp_sys_err_from_nt(status);
+  }
+  if (bytes_written) *bytes_written = (u64)iosb.Information;
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  s64 rc;
-  do {
-    rc = sp_syscall(SP_SYSCALL_NUM_WRITE, fd, buf, count);
-  } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_WRITE, fd, buf, count);
+  if (sp_sys_is_err(rc)) return sp_sys_err_from_errno(-rc);
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   s64 rc;
   do {
-    rc = write(fd, buf, count);
+    rc = write(fd, buf, sp_sys_posix_io_count(count));
   } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_WASM)
   __wasi_ciovec_t iov = { (const uint8_t*)buf, (__wasi_size_t)count };
   __wasi_size_t n = 0;
   __wasi_errno_t err = __wasi_fd_write((__wasi_fd_t)fd, &iov, 1, &n);
-  return err ? -1 : (s64)n;
+  if (err) return sp_sys_err_from_wasi(err);
+  if (bytes_written) *bytes_written = (u64)n;
+  return SP_OK;
 
 #else
   #error "sp_sys_write"
@@ -5086,38 +7729,76 @@ s64 sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count) {
 ///////////////////
 // SP_SYS_PREAD //
 ///////////////////
-s64 sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset) {
 #if defined(SP_WIN32)
-  OVERLAPPED ov = sp_zero;
-  ov.Offset = (DWORD)(offset & 0xFFFFFFFFu);
-  ov.OffsetHigh = (DWORD)(offset >> 32);
-  DWORD n = 0;
-  if (!ReadFile((HANDLE)fd, buf, (DWORD)count, &n, &ov)) {
-    DWORD e = GetLastError();
-    if (e == ERROR_BROKEN_PIPE || e == ERROR_HANDLE_EOF) return 0;
-    return -1;
+SP_PRIVATE sp_err_t sp_sys_win32_positional_begin(sp_sys_fd_t fd, sp_nt_file_position_information_t* saved) {
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_file_fs_device_information_t dev = sp_zero;
+  sp_nt_status_t status = SP_NT(NtQueryVolumeInformationFile)((void*)fd, &iosb, &dev, sizeof(dev), SP_NT_FILE_FS_DEVICE_INFORMATION);
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  switch (dev.DeviceType) {
+    case SP_NT_FILE_DEVICE_CD_ROM:
+    case SP_NT_FILE_DEVICE_DISK:
+      break;
+    default:
+      return SP_ERR_SYS_UNSEEKABLE;
   }
-  return (s64)n;
+
+  status = SP_NT(NtQueryInformationFile)((void*)fd, &iosb, saved, sizeof(*saved), SP_NT_FILE_POSITION_INFORMATION);
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+  return SP_OK;
+}
+#endif
+
+sp_err_t sp_sys_pread_p(sp_sys_fd_t fd, void* buf, u64 count, u64 offset, u64* bytes_read) {
+  if (bytes_read) *bytes_read = 0;
+  if (offset > (u64)SP_LIMIT_S64_MAX) return SP_ERR_SYS_INVALID;
+
+#if defined(SP_WIN32)
+  sp_nt_file_position_information_t saved = sp_zero;
+  sp_try(sp_sys_win32_positional_begin(fd, &saved));
+
+  s64 off = (s64)offset;
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtReadFile)((void*)fd, SP_NULLPTR, SP_NULLPTR, SP_NULLPTR, &iosb, buf, sp_sys_win32_io_count(count), &off, SP_NULLPTR);
+  if (status == SP_NT_STATUS_PENDING) {
+    sp_nt_status_t wait = SP_NT(NtWaitForSingleObject)((void*)fd, 0, SP_NULLPTR);
+    status = SP_NT_SUCCESS(wait) ? iosb.Status : wait;
+  }
+
+  sp_nt_io_status_block_t riosb = sp_zero;
+  SP_NT(NtSetInformationFile)((void*)fd, &riosb, &saved, sizeof(saved), SP_NT_FILE_POSITION_INFORMATION);
+
+  if (!SP_NT_SUCCESS(status)) {
+    if (status == SP_NT_STATUS_END_OF_FILE) return SP_OK;
+    if (status == SP_NT_STATUS_ACCESS_DENIED) return SP_ERR_SYS_BAD_FD;
+    return sp_sys_err_from_nt(status);
+  }
+  if (bytes_read) *bytes_read = (u64)iosb.Information;
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  s64 rc;
-  do {
-    rc = sp_syscall(SP_SYSCALL_NUM_PREAD64, fd, buf, count, offset);
-  } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_PREAD64, fd, buf, count, offset);
+  if (sp_sys_is_err(rc)) return sp_sys_err_from_errno(-rc);
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   s64 rc;
   do {
-    rc = pread(fd, buf, count, (off_t)offset);
+    rc = pread(fd, buf, sp_sys_posix_io_count(count), (off_t)offset);
   } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_WASM)
   __wasi_iovec_t iov = { (uint8_t*)buf, (__wasi_size_t)count };
   __wasi_size_t n = 0;
   __wasi_errno_t err = __wasi_fd_pread((__wasi_fd_t)fd, &iov, 1, (__wasi_filesize_t)offset, &n);
-  return err ? -1 : (s64)n;
+  if (err) return sp_sys_err_from_wasi(err);
+  if (bytes_read) *bytes_read = (u64)n;
+  return SP_OK;
 
 #else
   #error "sp_sys_pread"
@@ -5127,44 +7808,140 @@ s64 sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset) {
 ////////////////////
 // SP_SYS_PWRITE //
 ////////////////////
-s64 sp_sys_pwrite(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset) {
+sp_err_t sp_sys_pwrite_p(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset, u64* bytes_written) {
+  if (bytes_written) *bytes_written = 0;
+  if (offset > (u64)SP_LIMIT_S64_MAX) return SP_ERR_SYS_INVALID;
+
 #if defined(SP_WIN32)
-  OVERLAPPED ov = sp_zero;
-  ov.Offset = (DWORD)(offset & 0xFFFFFFFFu);
-  ov.OffsetHigh = (DWORD)(offset >> 32);
-  DWORD n = 0;
-  if (!WriteFile((HANDLE)fd, buf, (DWORD)count, &n, &ov)) return -1;
-  return (s64)n;
+  sp_nt_file_position_information_t saved = sp_zero;
+  sp_try(sp_sys_win32_positional_begin(fd, &saved));
+
+  s64 off = (s64)offset;
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtWriteFile)((void*)fd, SP_NULLPTR, SP_NULLPTR, SP_NULLPTR, &iosb, buf, sp_sys_win32_io_count(count), &off, SP_NULLPTR);
+  if (status == SP_NT_STATUS_PENDING) {
+    sp_nt_status_t wait = SP_NT(NtWaitForSingleObject)((void*)fd, 0, SP_NULLPTR);
+    status = SP_NT_SUCCESS(wait) ? iosb.Status : wait;
+  }
+
+  sp_nt_io_status_block_t riosb = sp_zero;
+  SP_NT(NtSetInformationFile)((void*)fd, &riosb, &saved, sizeof(saved), SP_NT_FILE_POSITION_INFORMATION);
+
+  if (!SP_NT_SUCCESS(status)) {
+    if (status == SP_NT_STATUS_ACCESS_DENIED) return SP_ERR_SYS_BAD_FD;
+    return sp_sys_err_from_nt(status);
+  }
+  if (bytes_written) *bytes_written = (u64)iosb.Information;
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  s64 rc;
-  do {
-    rc = sp_syscall(SP_SYSCALL_NUM_PWRITE64, fd, buf, count, offset);
-  } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_PWRITE64, fd, buf, count, offset);
+  if (sp_sys_is_err(rc)) return sp_sys_err_from_errno(-rc);
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   s64 rc;
   do {
-    rc = pwrite(fd, buf, count, (off_t)offset);
+    rc = pwrite(fd, buf, sp_sys_posix_io_count(count), (off_t)offset);
   } while (rc == -1 && errno == SP_EINTR);
-  return rc;
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
 
 #elif defined(SP_WASM)
   __wasi_ciovec_t iov = { (const uint8_t*)buf, (__wasi_size_t)count };
   __wasi_size_t n = 0;
   __wasi_errno_t err = __wasi_fd_pwrite((__wasi_fd_t)fd, &iov, 1, (__wasi_filesize_t)offset, &n);
-  return err ? -1 : (s64)n;
+  if (err) return sp_sys_err_from_wasi(err);
+  if (bytes_written) *bytes_written = (u64)n;
+  return SP_OK;
 
 #else
   #error "sp_sys_pwrite"
 #endif
 }
 
+sp_err_t sp_sys_transfer_p(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64* bytes_moved) {
+  if (bytes_moved) *bytes_moved = 0;
+
+#if defined(SP_LINUX)
+  sp_try(sp_sys_is_supported(SP_SYS_SUPPORT_SENDFILE));
+  s64 off = in_pos ? (s64)*in_pos : 0;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_SENDFILE, out, in, in_pos ? &off : SP_NULLPTR, count);
+  if (rc < 0) {
+    switch (-rc) {
+      case SP_ENOSYS: return sp_sys_mark_unsupported(SP_SYS_SUPPORT_SENDFILE);
+      case SP_EINVAL:
+      case SP_EOPNOTSUPP:
+      case SP_EPERM: return SP_ERR_SYS_UNSUPPORTED;
+      default: return sp_sys_err_from_errno(-rc);
+    }
+  }
+  if (in_pos) *in_pos = (u64)off;
+  if (bytes_moved) *bytes_moved = (u64)rc;
+  return SP_OK;
+
+#else
+  (void)in; (void)in_pos; (void)out; (void)count;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+sp_err_t sp_sys_transfer_positional_p(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64 offset, u64* bytes_moved) {
+  if (bytes_moved) *bytes_moved = 0;
+
+#if defined(SP_LINUX)
+  sp_try(sp_sys_is_supported(SP_SYS_SUPPORT_COPY_FILE_RANGE));
+  s64 out_off = (s64)offset;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_COPY_FILE_RANGE, in, in_pos, out, &out_off, count, 0);
+  if (rc < 0) {
+    switch (-rc) {
+      // If the OS literally does not have the fast path syscall, stop
+      // wasting time trying to call it, ever. Different runtime handle this
+      // differently:
+      // - Go used to cache ENOSYS, but then tried to get rid of this per-call
+      // checking in favor of just gating on the kernel version. But they
+      // found that that's not really possible, because ENOSYS can arise
+      // even on supported kernels thanks to seccomp / containers.
+      // - Rust caches ENOSYS but also EPERM (kind of). When they get EPERM,
+      // they probe by calling copy_file_range with a deliberately invalid
+      // handle. And the ordering of the kernel's checks tells them whether
+      // that EPERM was from seccomp (cache it) or not (don't)
+      // - Zig is weird. ENOSYS, EINVAL, and EOPNOTSUPP all globally kill
+      // the syscall.
+      case SP_ENOSYS: {
+        return sp_sys_mark_unsupported(SP_SYS_SUPPORT_COPY_FILE_RANGE);
+      }
+      // Otherwise, it just means that the fast path is unsupported *for
+      // this set of handles*, so we return UNSUPPORTED but do not globally
+      // flag this syscall as unsupported
+      case SP_EINVAL:
+      case SP_EXDEV:
+      case SP_EOPNOTSUPP:
+      case SP_EPERM:
+      case SP_EIO:
+      case SP_EBADF: {
+        return SP_ERR_SYS_UNSUPPORTED;
+      }
+      default: {
+        return sp_sys_err_from_errno(-rc);
+      }
+    }
+  }
+  if (bytes_moved) *bytes_moved = (u64)rc;
+  return SP_OK;
+
+#else
+  (void)in; (void)in_pos; (void)out; (void)offset; (void)count;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
 //////////////////
 // SP_SYS_LSEEK //
 //////////////////
-s64 sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence) {
+s64 sp_sys_lseek_p(sp_sys_fd_t fd, s64 offset, s32 whence) {
 #if defined(SP_WIN32)
   DWORD method;
   switch (whence) {
@@ -5186,7 +7963,8 @@ s64 sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence) {
     case SP_IO_SEEK_END: native = 2; break;
     default: return -1;
   }
-  return sp_syscall(SP_SYSCALL_NUM_LSEEK, fd, offset, native);
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_LSEEK, fd, offset, native);
+  return rc < 0 ? -1 : rc;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   s32 native;
@@ -5225,7 +8003,7 @@ s64 sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence) {
 #define SP_CLOCK_MONOTONIC 1
 #endif
 
-s32 sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts) {
+sp_err_t sp_sys_clock_gettime_p(s32 clockid, sp_sys_timespec_t* ts) {
 #if defined(SP_WIN32)
   if (clockid == SP_CLOCK_MONOTONIC) {
     LARGE_INTEGER freq, counter;
@@ -5235,7 +8013,7 @@ s32 sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts) {
     u64 remainder = (u64)(counter.QuadPart % freq.QuadPart);
     ts->tv_sec  = (s64)seconds;
     ts->tv_nsec = (s64)((remainder * 1000000000ULL) / (u64)freq.QuadPart);
-    return 0;
+    return SP_OK;
   }
   if (clockid == SP_CLOCK_REALTIME) {
     FILETIME ft;
@@ -5244,29 +8022,28 @@ s32 sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts) {
     u64 unix_100ns    = windows_100ns - 116444736000000000ULL;
     ts->tv_sec  = (s64)(unix_100ns / 10000000ULL);
     ts->tv_nsec = (s64)((unix_100ns % 10000000ULL) * 100);
-    return 0;
+    return SP_OK;
   }
-  return -1;
+  return SP_ERR_SYS_INVALID;
 
 #elif defined(SP_LINUX)
-  return (s32)sp_syscall(SP_SYSCALL_NUM_CLOCK_GETTIME, clockid, ts);
+  return sp_syscall_e(SP_SYSCALL_NUM_CLOCK_GETTIME, clockid, ts);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   struct timespec native;
-  s32 rc = clock_gettime((clockid_t)clockid, &native);
-  if (rc == 0) {
-    ts->tv_sec  = (s64)native.tv_sec;
-    ts->tv_nsec = (s64)native.tv_nsec;
-  }
-  return rc;
+  sp_err_t err = sp_sys_err_from_libc(clock_gettime((clockid_t)clockid, &native));
+  if (err != SP_OK) return err;
+  ts->tv_sec  = (s64)native.tv_sec;
+  ts->tv_nsec = (s64)native.tv_nsec;
+  return SP_OK;
 
 #elif defined(SP_WASM)
   __wasi_timestamp_t ns = 0;
   __wasi_errno_t err = __wasi_clock_time_get((__wasi_clockid_t)clockid, 1000, &ns);
-  if (err) return -1;
+  if (err) return sp_sys_err_from_wasi(err);
   ts->tv_sec  = (s64)(ns / 1000000000ULL);
   ts->tv_nsec = (s64)(ns % 1000000000ULL);
-  return 0;
+  return SP_OK;
 
 #else
   #error "sp_sys_clock_gettime"
@@ -5277,81 +8054,164 @@ s32 sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts) {
 // SP_SYS_OPEN //
 /////////////////
 #if defined(SP_WIN32)
-SP_PRIVATE u32 sp_sys_nt_access_from_flags(s32 flags) {
+SP_PRIVATE u32 sp_sys_nt_access_from_mode(sp_sys_open_mode_t mode, u32 flags) {
+  u32 read = FILE_READ_DATA | FILE_READ_EA;
+  u32 write = FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | FILE_APPEND_DATA;
+  if (flags & SP_SYS_OPEN_APPEND) write &= ~(u32)FILE_WRITE_DATA;
+
   u32 access = SYNCHRONIZE | FILE_READ_ATTRIBUTES;
-  s32 rw = flags & (SP_O_RDONLY | SP_O_WRONLY | SP_O_RDWR);
-  if (rw == SP_O_WRONLY) {
-    access |= FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | FILE_APPEND_DATA;
+  switch (mode) {
+    case SP_SYS_OPEN_MODE_RO: { access |= read; break; }
+    case SP_SYS_OPEN_MODE_WO: { access |= write; break; }
+    case SP_SYS_OPEN_MODE_RW: { access |= read | write; break; }
   }
-  else if (rw == SP_O_RDWR) {
-    access |= FILE_READ_DATA | FILE_READ_EA | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA | FILE_APPEND_DATA;
-  }
-  else {
-    access |= FILE_READ_DATA | FILE_READ_EA;
-  }
-  if (flags & SP_O_APPEND) access |= FILE_APPEND_DATA;
   return access;
 }
 
-
-#endif
-
-#if defined(SP_WASM)
-#define SP_O_CREAT 0
-#define SP_O_WRONLY 0
-#define SP_O_TRUNC 0
-#define SP_O_BINARY 0
-#define SP_O_DIRECTORY 0
-#define SP_O_RDONLY 0
-#define SP_O_APPEND 0
-#endif
-
-sp_sys_fd_t sp_sys_open(sp_sys_fd_t fd, const c8* path, u32 len, s32 flags, s32 mode) {
-#if defined(SP_WIN32)
-  (void)mode;
-  u32 access = sp_sys_nt_access_from_flags(flags);
-  u32 share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-  u32 disposition = sp_sys_nt_disposition_from_flags(flags);
-  u32 options = SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT;
-  options |= (flags & SP_O_DIRECTORY) ? SP_NT_FILE_DIRECTORY_FILE : SP_NT_FILE_NON_DIRECTORY_FILE;
-
-  void* handle = sp_sys_nt_open(fd, sp_str(path, len), access, share, disposition, options, FILE_ATTRIBUTE_NORMAL);
-  if (!handle) return SP_SYS_INVALID_FD;
-
-  if (flags & SP_O_APPEND) {
-    LARGE_INTEGER zero = { .QuadPart = 0 };
-    SetFilePointerEx((HANDLE)handle, zero, SP_NULLPTR, FILE_END);
-  }
-
-  return (sp_sys_fd_t)handle;
+SP_PRIVATE u32 sp_sys_nt_disposition_from_flags(u32 flags) {
+  if (flags & SP_SYS_OPEN_EXCLUSIVE)                                  return SP_NT_FILE_CREATE;
+  if ((flags & SP_SYS_OPEN_CREATE) && (flags & SP_SYS_OPEN_TRUNCATE)) return SP_NT_FILE_OVERWRITE_IF;
+  if (flags & SP_SYS_OPEN_CREATE)                                     return SP_NT_FILE_OPEN_IF;
+  if (flags & SP_SYS_OPEN_TRUNCATE)                                   return SP_NT_FILE_OVERWRITE;
+  return SP_NT_FILE_OPEN;
+}
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return (sp_sys_fd_t)sp_syscall(SP_SYSCALL_NUM_OPENAT, fd, buf, flags, mode);
+SP_PRIVATE u32 sp_sys_linux_open_flags(sp_sys_open_mode_t mode, u32 flags) {
+  u32 o = SP_SYS_LINUX_O_CLOEXEC;
+  switch (mode) {
+    case SP_SYS_OPEN_MODE_RO: { o |= SP_SYS_LINUX_O_RDONLY; break; }
+    case SP_SYS_OPEN_MODE_WO: { o |= SP_SYS_LINUX_O_WRONLY; break; }
+    case SP_SYS_OPEN_MODE_RW: { o |= SP_SYS_LINUX_O_RDWR; break; }
+  }
+  if (flags & (SP_SYS_OPEN_CREATE | SP_SYS_OPEN_EXCLUSIVE)) o |= SP_SYS_LINUX_O_CREAT;
+  if (flags & SP_SYS_OPEN_EXCLUSIVE) o |= SP_SYS_LINUX_O_EXCL;
+  if (flags & SP_SYS_OPEN_TRUNCATE)  o |= SP_SYS_LINUX_O_TRUNC;
+  if (flags & SP_SYS_OPEN_APPEND)    o |= SP_SYS_LINUX_O_APPEND;
+  return o;
+}
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return (sp_sys_fd_t)openat((int)fd, buf, flags, mode);
+SP_PRIVATE s32 sp_sys_posix_open_flags(sp_sys_open_mode_t mode, u32 flags) {
+  s32 o = O_CLOEXEC;
+  switch (mode) {
+    case SP_SYS_OPEN_MODE_RO: { o |= O_RDONLY; break; }
+    case SP_SYS_OPEN_MODE_WO: { o |= O_WRONLY; break; }
+    case SP_SYS_OPEN_MODE_RW: { o |= O_RDWR; break; }
+  }
+  if (flags & (SP_SYS_OPEN_CREATE | SP_SYS_OPEN_EXCLUSIVE)) o |= O_CREAT;
+  if (flags & SP_SYS_OPEN_EXCLUSIVE) o |= O_EXCL;
+  if (flags & SP_SYS_OPEN_TRUNCATE)  o |= O_TRUNC;
+  if (flags & SP_SYS_OPEN_APPEND)    o |= O_APPEND;
+  return o;
+}
+
+#endif
+
+sp_err_t sp_sys_open_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out) {
+  *out = SP_SYS_INVALID_FD;
+
+  if (flags & SP_SYS_OPEN_TRUNCATE) {
+    if (mode == SP_SYS_OPEN_MODE_RO)  return SP_ERR_SYS_INVALID;
+    if (flags & SP_SYS_OPEN_APPEND)   return SP_ERR_SYS_INVALID;
+  }
+
+#if defined(SP_WIN32)
+  u32 access = sp_sys_nt_access_from_mode(mode, flags);
+  u32 share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+  u32 disposition = sp_sys_nt_disposition_from_flags(flags);
+  u32 options = SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT | SP_NT_FILE_NON_DIRECTORY_FILE;
+  if (flags & SP_SYS_OPEN_EXCLUSIVE) options |= SP_NT_FILE_OPEN_REPARSE_POINT;
+
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(fd, sp_str(path, len), access, share, disposition, options, FILE_ATTRIBUTE_NORMAL, &handle);
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  *out = handle;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  c8 buffer [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buffer));
+
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_OPENAT, fd, buffer, sp_sys_linux_open_flags(mode, flags), 0644);
+  if (sp_sys_is_err(rc)) return sp_sys_err_from_errno(-rc);
+
+  *out = (sp_sys_fd_t)rc;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  s32 rc = openat((int)fd, buf, sp_sys_posix_open_flags(mode, flags), 0644);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  *out = (sp_sys_fd_t)rc;
+  return SP_OK;
 
 #elif defined(SP_WASM)
-  (void)fd; (void)path; (void)len; (void)flags; (void)mode;
-  return -1;
+  (void)fd; (void)path; (void)len; (void)mode; (void)flags;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_open"
 #endif
 }
 
-sp_sys_fd_t sp_sys_open_s(sp_sys_fd_t fd, sp_str_t path, s32 flags, s32 mode) {
-  return sp_sys_open(fd, path.data, path.len, flags, mode);
+sp_err_t sp_sys_open_dir_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_fd_t* out) {
+  *out = SP_SYS_INVALID_FD;
+
+#if defined(SP_WIN32)
+  u32 access = SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_READ_DATA | FILE_READ_EA;
+  u32 share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+  u32 options = SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT | SP_NT_FILE_DIRECTORY_FILE;
+
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(fd, sp_str(path, len), access, share, SP_NT_FILE_OPEN, options, FILE_ATTRIBUTE_NORMAL, &handle);
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  *out = handle;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_OPENAT, fd, buf, SP_SYS_LINUX_O_RDONLY | SP_SYS_LINUX_O_DIRECTORY | SP_SYS_LINUX_O_CLOEXEC, 0);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+
+  *out = (sp_sys_fd_t)rc;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  s32 rc = openat((int)fd, buf, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+
+  *out = (sp_sys_fd_t)rc;
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  (void)fd; (void)path; (void)len;
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_open_dir"
+#endif
+
+}
+
+sp_err_t sp_sys_open_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out) {
+  return sp_sys_open(fd, path.data, path.len, mode, flags, out);
+}
+
+sp_err_t sp_sys_open_dir_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_fd_t* out) {
+  return sp_sys_open_dir(fd, path.data, path.len, out);
 }
 
 /////////////////////
 // SP_SYS_GET_ROOT //
 /////////////////////
-sp_sys_fd_t sp_sys_get_root(s32 it) {
+sp_sys_fd_t sp_sys_get_root_p(s32 it) {
 #if defined(SP_WIN32)
   if (it != 0) return SP_SYS_INVALID_FD;
   sp_nt_unicode_string_t* cwd = (sp_nt_unicode_string_t*)(sp_nt_process_params() + 0x38);
@@ -5373,19 +8233,35 @@ sp_sys_fd_t sp_sys_get_root(s32 it) {
 //////////////////////
 // SP_SYS_NANOSLEEP //
 //////////////////////
-s32 sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem) {
+sp_err_t sp_sys_nanosleep_p(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem) {
 #if defined(SP_WIN32)
   (void)rem;
-  u64 ns = (u64)req->tv_sec * 1000000000ULL + (u64)req->tv_nsec;
-  Sleep((DWORD)(ns / 1000000ULL));
-  return 0;
+  u64 ns = (u64)req->tv_sec * SP_TM_S_TO_NS + (u64)req->tv_nsec;
+  if (!ns) return SP_OK;
+
+  LARGE_INTEGER freq, start;
+  QueryPerformanceFrequency(&freq);
+  QueryPerformanceCounter(&start);
+  while (true) {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    u64 ticks = (u64)(now.QuadPart - start.QuadPart);
+    u64 f = (u64)freq.QuadPart;
+    u64 elapsed_ns = (ticks / f) * SP_TM_S_TO_NS + ((ticks % f) * SP_TM_S_TO_NS) / f;
+    if (elapsed_ns >= ns) return SP_OK;
+    u64 remaining_ms = (ns - elapsed_ns) / SP_TM_MS_TO_NS;
+    Sleep(remaining_ms ? (DWORD)sp_min(remaining_ms, (u64)0xFFFFFFFE) : 1);
+  }
 
 #elif defined(SP_LINUX)
-  s32 rc = (s32)sp_syscall(SP_SYSCALL_NUM_NANOSLEEP, req, rem);
-  while (rc == -1 && errno == SP_EINTR) {
-    rc = (s32)sp_syscall(SP_SYSCALL_NUM_NANOSLEEP, rem, rem);
+  sp_sys_timespec_t remaining = sp_zero;
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_NANOSLEEP, req, &remaining);
+  while (rc == -SP_EINTR) {
+    rc = sp_syscall(SP_SYSCALL_NUM_NANOSLEEP, &remaining, &remaining);
   }
-  return rc;
+  if (rem) *rem = remaining;
+  if (rc < 0) { sp_unreachable_return(SP_ERR_SYS_BUG); }
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   struct timespec r_native   = { .tv_sec = (time_t)req->tv_sec, .tv_nsec = (long)req->tv_nsec };
@@ -5399,7 +8275,8 @@ s32 sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem) {
     rem->tv_sec  = (s64)rem_native.tv_sec;
     rem->tv_nsec = (s64)rem_native.tv_nsec;
   }
-  return rc;
+  if (rc != 0) { sp_unreachable_return(SP_ERR_SYS_BUG); }
+  return SP_OK;
 
 #elif defined(SP_WASM)
   __wasi_timestamp_t ns = (__wasi_timestamp_t)(req->tv_sec * SP_TM_S_TO_NS + req->tv_nsec);
@@ -5423,10 +8300,97 @@ s32 sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem) {
     rem->tv_sec = 0;
     rem->tv_nsec = 0;
   }
-  return 0;
+  return SP_OK;
 
 #else
   #error "sp_sys_nanosleep"
+#endif
+}
+
+//////////////////
+// SP_SYS_FUTEX //
+//////////////////
+bool sp_sys_futex_wait_p(u32* addr, u32 expected, const sp_sys_timespec_t* timeout) {
+#if defined(SP_LINUX)
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_FUTEX, addr, SP_SYS_LINUX_FUTEX_WAIT | SP_SYS_LINUX_FUTEX_PRIVATE_FLAG, expected, timeout);
+  return rc != -SP_ETIMEDOUT;
+
+#elif defined(SP_WIN32)
+  if (!timeout) {
+    return SP_NT(RtlWaitOnAddress)(addr, &expected, sizeof(u32), SP_NULLPTR) != SP_NT_STATUS_TIMEOUT;
+  }
+  // Relative NT waits can expire up to one timer tick early; Linux and mac
+  // never report timeout before the deadline. Re-wait the remainder so false
+  // means the full duration elapsed on every platform.
+  LARGE_INTEGER freq, start;
+  QueryPerformanceFrequency(&freq);
+  QueryPerformanceCounter(&start);
+  s64 total_100ns = timeout->tv_sec * 10000000 + timeout->tv_nsec / 100;
+  s64 remaining_100ns = total_100ns;
+  while (true) {
+    s64 nt_timeout = -remaining_100ns;
+    sp_nt_status_t status = SP_NT(RtlWaitOnAddress)(addr, &expected, sizeof(u32), &nt_timeout);
+    if (status != SP_NT_STATUS_TIMEOUT) return true;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    s64 ticks = now.QuadPart - start.QuadPart;
+    s64 elapsed_100ns = (ticks / freq.QuadPart) * 10000000 + ((ticks % freq.QuadPart) * 10000000) / freq.QuadPart;
+    if (elapsed_100ns >= total_100ns) return false;
+    remaining_100ns = total_100ns - elapsed_100ns;
+  }
+
+#elif defined(SP_MACOS)
+  u64 timeout_ns = 0;
+  if (timeout) {
+    timeout_ns = (u64)timeout->tv_sec * SP_TM_S_TO_NS + (u64)timeout->tv_nsec;
+    if (!timeout_ns) timeout_ns = 1;
+  }
+  s32 status = __ulock_wait2(SP_SYS_ULOCK_COMPARE_AND_WAIT | SP_SYS_ULOCK_NO_ERRNO, addr, expected, timeout_ns, 0);
+  return status != -SP_ETIMEDOUT;
+
+#else
+  (void)addr;
+  (void)expected;
+  (void)timeout;
+  return false;
+#endif
+}
+
+void sp_sys_futex_wake_p(u32* addr) {
+#if defined(SP_LINUX)
+  sp_syscall(SP_SYSCALL_NUM_FUTEX, addr, SP_SYS_LINUX_FUTEX_WAKE | SP_SYS_LINUX_FUTEX_PRIVATE_FLAG, 1);
+
+#elif defined(SP_WIN32)
+  SP_NT(RtlWakeAddressSingle)(addr);
+
+#elif defined(SP_MACOS)
+  for (;;) {
+    s32 status = __ulock_wake(SP_SYS_ULOCK_COMPARE_AND_WAIT | SP_SYS_ULOCK_NO_ERRNO, addr, 0);
+    if (status == -SP_EINTR || status == -SP_ECANCELED) continue;
+    return;
+  }
+
+#else
+  (void)addr;
+#endif
+}
+
+void sp_sys_futex_wake_all_p(u32* addr) {
+#if defined(SP_LINUX)
+  sp_syscall(SP_SYSCALL_NUM_FUTEX, addr, SP_SYS_LINUX_FUTEX_WAKE | SP_SYS_LINUX_FUTEX_PRIVATE_FLAG, SP_LIMIT_S32_MAX);
+
+#elif defined(SP_WIN32)
+  SP_NT(RtlWakeAddressAll)(addr);
+
+#elif defined(SP_MACOS)
+  for (;;) {
+    s32 status = __ulock_wake(SP_SYS_ULOCK_COMPARE_AND_WAIT | SP_SYS_ULOCK_NO_ERRNO | SP_SYS_ULOCK_WAKE_ALL, addr, 0);
+    if (status == -SP_EINTR || status == -SP_ECANCELED) continue;
+    return;
+  }
+
+#else
+  (void)addr;
 #endif
 }
 
@@ -5437,11 +8401,11 @@ static s64 sp_sys_copy_env_var(const c8* name, c8* buf, u64 size) {
   return (s64)len;
 }
 
-s64 sp_sys_get_storage_path(c8* buf, u64 size) {
+s64 sp_sys_get_storage_path_p(c8* buf, u64 size) {
   return sp_sys_copy_env_var("LOCALAPPDATA", buf, size);
 }
 
-s64 sp_sys_get_config_path(c8* buf, u64 size) {
+s64 sp_sys_get_config_path_p(c8* buf, u64 size) {
   return sp_sys_copy_env_var("APPDATA", buf, size);
 }
 #else
@@ -5467,198 +8431,133 @@ static s64 sp_sys_xdg_or_home(sp_str_t xdg_var, sp_str_t home_suffix, c8* buf, u
   return result;
 }
 
-s64 sp_sys_get_storage_path(c8* buf, u64 size) {
+s64 sp_sys_get_storage_path_p(c8* buf, u64 size) {
   return sp_sys_xdg_or_home(sp_str_lit("XDG_DATA_HOME"), sp_str_lit(".local/share"), buf, size);
 }
 
-s64 sp_sys_get_config_path(c8* buf, u64 size) {
+s64 sp_sys_get_config_path_p(c8* buf, u64 size) {
   return sp_sys_xdg_or_home(sp_str_lit("XDG_CONFIG_HOME"), sp_str_lit(".config"), buf, size);
 }
 #endif
 
-//////////////////
-// SP_SYS_READY //
-//////////////////
-#define SP_SYS_FDS_WAIT_CAP 64
+/////////////////
+// SP_SYS_WAIT //
+/////////////////
+#define SP_SYS_WAIT_CAP 64
 
-#if defined(SP_WIN32)
-static s32 sp_sys_fd_ready_handle(HANDLE h, u8* out_ready) {
-  *out_ready = 0;
-  if (h == SP_NULLPTR || h == INVALID_HANDLE_VALUE) return 0;
+#if defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO)
+SP_PRIVATE u64 sp_sys_ns_from_timespec(s64 sec, s64 nsec) {
+  return (u64)sec * SP_TM_S_TO_NS + (u64)nsec;
+}
+#endif
 
-  DWORD type = GetFileType(h);
-  if (type == FILE_TYPE_PIPE) {
-    DWORD avail = 0;
-    if (!PeekNamedPipe(h, SP_NULLPTR, 0, SP_NULLPTR, &avail, SP_NULLPTR)) {
-      *out_ready = 1;
-      return 0;
-    }
-    *out_ready = avail > 0 ? 1 : 0;
-    return 0;
+SP_PRIVATE sp_sys_timespec_t sp_sys_timespec_from_ns(u64 ns) {
+  return SP_RVAL(sp_sys_timespec_t) {
+    .tv_sec = (s64)(ns / SP_TM_S_TO_NS),
+    .tv_nsec = (s64)(ns % SP_TM_S_TO_NS),
+  };
+}
+
+#if defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO)
+SP_PRIVATE sp_err_t sp_sys_posix_poll(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled) {
+#if defined(SP_LINUX)
+  sp_sys_linux_pollfd_t pfds [SP_SYS_WAIT_CAP];
+  for (u64 i = 0; i < n; i++) {
+    pfds[i] = (sp_sys_linux_pollfd_t){ .fd = fds[i], .events = SP_SYS_LINUX_POLLIN };
   }
-  if (type == FILE_TYPE_CHAR) {
-    DWORD console_mode = 0;
-    if (GetConsoleMode(h, &console_mode)) {
-      for (;;) {
-        DWORD num_events = 0;
-        if (!GetNumberOfConsoleInputEvents(h, &num_events) || num_events == 0) return 0;
-
-        INPUT_RECORD rec;
-        DWORD peeked = 0;
-        if (!PeekConsoleInputW(h, &rec, 1, &peeked) || peeked == 0) return 0;
-        if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) {
-          *out_ready = 1;
-          return 0;
-        }
-
-        DWORD consumed = 0;
-        if (!ReadConsoleInputW(h, &rec, 1, &consumed) || consumed == 0) return 0;
+  u64 deadline_ns = 0;
+  u64 remaining_ns = (u64)timeout_ms * SP_TM_MS_TO_NS;
+  if (timeout_ms) {
+    sp_sys_timespec_t now = sp_zero;
+    sp_syscall(SP_SYSCALL_NUM_CLOCK_GETTIME, SP_CLOCK_MONOTONIC, &now);
+    deadline_ns = sp_sys_ns_from_timespec(now.tv_sec, now.tv_nsec) + remaining_ns;
+  }
+  while (true) {
+    sp_sys_timespec_t ts = sp_sys_timespec_from_ns(remaining_ns);
+    s64 rc = sp_syscall(SP_SYSCALL_NUM_PPOLL, pfds, n, timeout_ms ? &ts : SP_NULLPTR, 0, 0);
+    if (rc == -SP_EINTR) {
+      if (timeout_ms) {
+        sp_sys_timespec_t now = sp_zero;
+        sp_syscall(SP_SYSCALL_NUM_CLOCK_GETTIME, SP_CLOCK_MONOTONIC, &now);
+        u64 now_ns = sp_sys_ns_from_timespec(now.tv_sec, now.tv_nsec);
+        if (now_ns >= deadline_ns) return SP_ERR_SYS_TIMED_OUT;
+        remaining_ns = deadline_ns - now_ns;
+      }
+      continue;
+    }
+    if (rc < 0) return sp_sys_err_from_errno(-rc);
+    if (rc == 0) return SP_ERR_SYS_TIMED_OUT;
+    for (u64 i = 0; i < n; i++) {
+      if (pfds[i].revents & (SP_SYS_LINUX_POLLIN | SP_SYS_LINUX_POLLHUP | SP_SYS_LINUX_POLLERR | SP_SYS_LINUX_POLLNVAL)) {
+        *signaled = i;
+        return SP_OK;
       }
     }
-    *out_ready = (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) ? 1 : 0;
-    return 0;
+    sp_unreachable_return(SP_ERR_SYS_BUG);
   }
-  if (type == FILE_TYPE_DISK) {
-    *out_ready = 1;
-    return 0;
-  }
-  if (type == FILE_TYPE_UNKNOWN) {
-    return 0;
-  }
-  *out_ready = (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) ? 1 : 0;
-  return 0;
-}
 
-s32 sp_sys_fd_ready(sp_sys_fd_t fd, u8* ready) {
-  return sp_sys_fd_ready_handle((HANDLE)fd, ready);
-}
-
-s32 sp_sys_fd_wait(sp_sys_fd_t fd) {
-  for (;;) {
-    u8 ready = 0;
-    if (sp_sys_fd_ready_handle((HANDLE)fd, &ready) != 0) return -1;
-    if (ready) return 0;
-    Sleep(1);
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct pollfd pfds [SP_SYS_WAIT_CAP];
+  for (u64 i = 0; i < n; i++) {
+    pfds[i] = (struct pollfd){ .fd = fds[i], .events = POLLIN };
   }
-}
-
-s32 sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds) {
-  if (nfds == 0) return 0;
-  if (nfds > SP_SYS_FDS_WAIT_CAP) return -1;
-  for (;;) {
-    s32 count = 0;
-    for (u64 i = 0; i < nfds; i++) {
-      ready[i] = 0;
-      if (sp_sys_fd_ready_handle((HANDLE)fds[i], &ready[i]) != 0) return -1;
-      if (ready[i]) count++;
+  u64 deadline_ns = 0;
+  s32 remaining_ms = timeout_ms ? (s32)sp_min(timeout_ms, (u32)SP_LIMIT_S32_MAX) : -1;
+  if (timeout_ms) {
+    struct timespec now = sp_zero;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    deadline_ns = sp_sys_ns_from_timespec((s64)now.tv_sec, (s64)now.tv_nsec) + (u64)timeout_ms * SP_TM_MS_TO_NS;
+  }
+  while (true) {
+    s32 rc = poll(pfds, (nfds_t)n, remaining_ms);
+    if (rc < 0 && errno == EINTR) {
+      if (timeout_ms) {
+        struct timespec now = sp_zero;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        u64 now_ns = sp_sys_ns_from_timespec((s64)now.tv_sec, (s64)now.tv_nsec);
+        if (now_ns >= deadline_ns) return SP_ERR_SYS_TIMED_OUT;
+        remaining_ms = (s32)sp_min((deadline_ns - now_ns) / SP_TM_MS_TO_NS + 1, (u64)SP_LIMIT_S32_MAX);
+      }
+      continue;
     }
-    if (count > 0) return count;
-    Sleep(1);
-  }
-}
-
-#elif defined(SP_LINUX)
-typedef struct {
-  s32 fd;
-  s16 events;
-  s16 revents;
-} sp_sys_linux_pollfd_t;
-
-#define SP_SYS_LINUX_POLLIN  0x0001
-#define SP_SYS_LINUX_POLLERR 0x0008
-#define SP_SYS_LINUX_POLLHUP 0x0010
-
-s32 sp_sys_fd_ready(sp_sys_fd_t fd, u8* ready) {
-  *ready = 0;
-  sp_sys_linux_pollfd_t pfd = { .fd = fd, .events = SP_SYS_LINUX_POLLIN };
-  sp_sys_timespec_t ts = { 0, 0 };
-  s32 r = (s32)sp_syscall(SP_SYSCALL_NUM_PPOLL, &pfd, 1, &ts, 0, 0);
-  if (r < 0) return -1;
-  if (r > 0 && (pfd.revents & (SP_SYS_LINUX_POLLIN | SP_SYS_LINUX_POLLHUP | SP_SYS_LINUX_POLLERR))) *ready = 1;
-  return 0;
-}
-
-s32 sp_sys_fd_wait(sp_sys_fd_t fd) {
-  sp_sys_linux_pollfd_t pfd = { .fd = fd, .events = SP_SYS_LINUX_POLLIN };
-  s32 r = (s32)sp_syscall(SP_SYSCALL_NUM_PPOLL, &pfd, 1, SP_NULLPTR, 0, 0);
-  return r < 0 ? -1 : 0;
-}
-
-s32 sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds) {
-  if (nfds == 0) return 0;
-  if (nfds > SP_SYS_FDS_WAIT_CAP) return -1;
-  sp_sys_linux_pollfd_t pfds[SP_SYS_FDS_WAIT_CAP];
-  for (u64 i = 0; i < nfds; i++) {
-    pfds[i] = (sp_sys_linux_pollfd_t){ .fd = fds[i], .events = SP_SYS_LINUX_POLLIN };
-    ready[i] = 0;
-  }
-  s32 r = (s32)sp_syscall(SP_SYSCALL_NUM_PPOLL, pfds, nfds, SP_NULLPTR, 0, 0);
-  if (r < 0) return -1;
-  s32 count = 0;
-  for (u64 i = 0; i < nfds; i++) {
-    if (pfds[i].revents & (SP_SYS_LINUX_POLLIN | SP_SYS_LINUX_POLLHUP | SP_SYS_LINUX_POLLERR)) {
-      ready[i] = 1;
-      count++;
+    if (rc < 0) return sp_sys_err_from_errno(errno);
+    if (rc == 0) return SP_ERR_SYS_TIMED_OUT;
+    for (u64 i = 0; i < n; i++) {
+      if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
+        *signaled = i;
+        return SP_OK;
+      }
     }
+    sp_unreachable_return(SP_ERR_SYS_BUG);
   }
-  return count;
+#endif
 }
+#endif
+
+// Takes platform-waitable objects only; the portable set is {tty, event};
+// anything else is a caller bug. Win32 WFMO admits consoles, events, and
+// process handles — never synchronous pipes.
+sp_err_t sp_sys_wait_p(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled) {
+  if (n == 0 || n > SP_SYS_WAIT_CAP) { sp_unreachable_return(SP_ERR_SYS_BUG); }
+
+#if defined(SP_WIN32)
+  HANDLE handles [SP_SYS_WAIT_CAP];
+  for (u64 i = 0; i < n; i++) {
+    handles[i] = (HANDLE)fds[i];
+  }
+  DWORD rc = WaitForMultipleObjects((DWORD)n, handles, false, timeout_ms ? timeout_ms : INFINITE);
+  if (rc == WAIT_TIMEOUT) return SP_ERR_SYS_TIMED_OUT;
+  if (rc == WAIT_FAILED) return sp_sys_err_from_win32(GetLastError());
+  *signaled = (u64)(rc - WAIT_OBJECT_0);
+  return SP_OK;
+
+#elif defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO)
+  return sp_sys_posix_poll(fds, n, timeout_ms, signaled);
 
 #elif defined(SP_WASM)
-static s32 sp_sys_fd_wasi_ready(sp_sys_fd_t fd, u8* out_ready) {
-  *out_ready = 0;
-  __wasi_subscription_t subs[2] = {
-    {
-      .userdata = 0,
-      .u = {
-        .tag = __WASI_EVENTTYPE_FD_READ,
-        .u = { .fd_read = { .file_descriptor = (__wasi_fd_t)fd } },
-      },
-    },
-    {
-      .userdata = 1,
-      .u = {
-        .tag = __WASI_EVENTTYPE_CLOCK,
-        .u = { .clock = { .id = 1, .timeout = 0, .precision = 0, .flags = 0 } },
-      },
-    },
-  };
-  __wasi_event_t events[2];
-  __wasi_size_t nev = 0;
-  if (__wasi_poll_oneoff(subs, events, 2, &nev)) return -1;
-  for (__wasi_size_t i = 0; i < nev; i++) {
-    if (events[i].userdata == 0) {
-      *out_ready = 1;
-      return 0;
-    }
-  }
-  return 0;
-}
-
-s32 sp_sys_fd_ready(sp_sys_fd_t fd, u8* ready) {
-  return sp_sys_fd_wasi_ready(fd, ready);
-}
-
-s32 sp_sys_fd_wait(sp_sys_fd_t fd) {
-  __wasi_subscription_t sub = {
-    .userdata = 0,
-    .u = {
-      .tag = __WASI_EVENTTYPE_FD_READ,
-      .u = { .fd_read = { .file_descriptor = (__wasi_fd_t)fd } },
-    },
-  };
-  __wasi_event_t event;
-  __wasi_size_t nev = 0;
-  if (__wasi_poll_oneoff(&sub, &event, 1, &nev)) return -1;
-  return 0;
-}
-
-s32 sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds) {
-  if (nfds == 0) return 0;
-  if (nfds > SP_SYS_FDS_WAIT_CAP) return -1;
-  __wasi_subscription_t subs[SP_SYS_FDS_WAIT_CAP];
-  __wasi_event_t        events[SP_SYS_FDS_WAIT_CAP];
-  for (u64 i = 0; i < nfds; i++) {
+  __wasi_subscription_t subs [SP_SYS_WAIT_CAP + 1];
+  __wasi_event_t        events [SP_SYS_WAIT_CAP + 1];
+  for (u64 i = 0; i < n; i++) {
     subs[i] = (__wasi_subscription_t){
       .userdata = (__wasi_userdata_t)i,
       .u = {
@@ -5666,58 +8565,1017 @@ s32 sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds) {
         .u = { .fd_read = { .file_descriptor = (__wasi_fd_t)fds[i] } },
       },
     };
-    ready[i] = 0;
+  }
+  __wasi_size_t nsub = (__wasi_size_t)n;
+  if (timeout_ms) {
+    subs[nsub++] = (__wasi_subscription_t){
+      .userdata = (__wasi_userdata_t)n,
+      .u = {
+        .tag = __WASI_EVENTTYPE_CLOCK,
+        .u = { .clock = { .id = 1, .timeout = (__wasi_timestamp_t)timeout_ms * SP_TM_MS_TO_NS, .precision = 0, .flags = 0 } },
+      },
+    };
   }
   __wasi_size_t nev = 0;
-  if (__wasi_poll_oneoff(subs, events, (__wasi_size_t)nfds, &nev)) return -1;
-  s32 count = 0;
+  __wasi_errno_t err = __wasi_poll_oneoff(subs, events, nsub, &nev);
+  if (err) return sp_sys_err_from_wasi(err);
+  u64 lowest = n;
   for (__wasi_size_t i = 0; i < nev; i++) {
     u64 idx = (u64)events[i].userdata;
-    if (idx < nfds && !ready[idx]) {
-      ready[idx] = 1;
-      count++;
-    }
+    if (idx < lowest) lowest = idx;
   }
-  return count;
-}
+  if (lowest == n) return SP_ERR_SYS_TIMED_OUT;
+  *signaled = lowest;
+  return SP_OK;
 
 #else
-s32 sp_sys_fd_ready(sp_sys_fd_t fd, u8* ready) {
-  *ready = 0;
-  struct pollfd pfd = { .fd = fd, .events = POLLIN };
-  s32 r = (s32)poll(&pfd, 1, 0);
-  if (r < 0) return -1;
-  if (r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) *ready = 1;
-  return 0;
+  #error "sp_sys_wait"
+#endif
 }
 
-s32 sp_sys_fd_wait(sp_sys_fd_t fd) {
-  struct pollfd pfd = { .fd = fd, .events = POLLIN };
-  s32 r = (s32)poll(&pfd, 1, -1);
-  return r < 0 ? -1 : 0;
+////////////
+// SP_TTY //
+////////////
+#if defined(SP_WIN32)
+  typedef struct {
+    u32 mode;
+    u32 input_cp;
+    u32 output_cp;
+  } sp_console_t;
+
+  sp_static_assert(sizeof(sp_console_t) <= SP_SYS_TTY_ATTR_SIZE, tty_attr_fits);
+#elif defined(SP_LINUX)
+  typedef sp_sys_termios_t sp_termios_t;
+
+  sp_static_assert(sizeof(sp_termios_t) <= SP_SYS_TTY_ATTR_SIZE, tty_attr_fits);
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  typedef struct termios sp_termios_t;
+
+  sp_static_assert(sizeof(sp_termios_t) <= SP_SYS_TTY_ATTR_SIZE, tty_attr_fits);
+#endif
+
+////////////////////
+// SP_SYS_TTY_GET //
+////////////////////
+sp_err_t sp_sys_tty_get_p(sp_sys_fd_t fd, sp_sys_tty_attr_t* attr) {
+  *attr = sp_zero_s(sp_sys_tty_attr_t);
+
+#if defined(SP_WIN32)
+  HANDLE handle = (HANDLE)fd;
+  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return SP_ERR_SYS_BAD_FD;
+  DWORD mode = 0;
+  if (!GetConsoleMode(handle, &mode)) return sp_sys_tty_err_from_win32(GetLastError());
+  UINT input_cp = GetConsoleCP();
+  if (!input_cp) return sp_sys_tty_err_from_win32(GetLastError());
+  UINT output_cp = GetConsoleOutputCP();
+  if (!output_cp) return sp_sys_tty_err_from_win32(GetLastError());
+
+  sp_console_t* console = (sp_console_t*)(void*)attr->opaque;
+  console->mode = (u32)mode;
+  console->input_cp = (u32)input_cp;
+  console->output_cp = (u32)output_cp;
+  attr->present = true;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_IOCTL, fd, SP_TCGETS, attr->opaque);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  attr->present = true;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  s32 rc;
+  do {
+    rc = tcgetattr(fd, (sp_termios_t*)(void*)attr->opaque);
+  } while (rc == -1 && errno == SP_EINTR);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  attr->present = true;
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_tty_get"
+#endif
 }
 
-s32 sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds) {
-  if (nfds == 0) return 0;
-  if (nfds > SP_SYS_FDS_WAIT_CAP) return -1;
-  struct pollfd pfds[SP_SYS_FDS_WAIT_CAP];
-  for (u64 i = 0; i < nfds; i++) {
-    pfds[i] = (struct pollfd){ .fd = fds[i], .events = POLLIN };
-    ready[i] = 0;
+////////////////////
+// SP_SYS_TTY_SET //
+////////////////////
+sp_err_t sp_sys_tty_set_p(sp_sys_fd_t fd, const sp_sys_tty_attr_t* attr) {
+  if (!attr->present) return SP_OK;
+
+#if defined(SP_WIN32)
+  HANDLE handle = (HANDLE)fd;
+  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return SP_ERR_SYS_BAD_FD;
+  const sp_console_t* console = (const sp_console_t*)(const void*)attr->opaque;
+  if (!SetConsoleMode(handle, (DWORD)console->mode)) return sp_sys_tty_err_from_win32(GetLastError());
+  if (!SetConsoleCP((UINT)console->input_cp)) return sp_sys_tty_err_from_win32(GetLastError());
+  if (!SetConsoleOutputCP((UINT)console->output_cp)) return sp_sys_tty_err_from_win32(GetLastError());
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_IOCTL, fd, SP_TCSETS + (u64)SP_TCSAFLUSH, attr->opaque);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  s32 rc;
+  do {
+    rc = tcsetattr(fd, SP_TCSAFLUSH, (const sp_termios_t*)(const void*)attr->opaque);
+  } while (rc == -1 && errno == SP_EINTR);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_tty_set"
+#endif
+}
+
+/////////////////////
+// SP_SYS_TTY_SIZE //
+/////////////////////
+sp_err_t sp_sys_tty_size_p(sp_sys_fd_t fd, u32* cols, u32* rows) {
+  if (cols) *cols = 0;
+  if (rows) *rows = 0;
+
+#if defined(SP_WIN32)
+  HANDLE handle = (HANDLE)fd;
+  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return SP_ERR_SYS_BAD_FD;
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (!GetConsoleScreenBufferInfo(handle, &csbi)) return sp_sys_tty_err_from_win32(GetLastError());
+  if (cols) *cols = (u32)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+  if (rows) *rows = (u32)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  sp_sys_winsize_t ws = sp_zero;
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_IOCTL, fd, SP_TIOCGWINSZ, &ws);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  if (cols) *cols = (u32)ws.ws_col;
+  if (rows) *rows = (u32)ws.ws_row;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct winsize ws = sp_zero;
+  s32 rc;
+  do {
+    rc = ioctl(fd, SP_TIOCGWINSZ, &ws);
+  } while (rc == -1 && errno == SP_EINTR);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (cols) *cols = (u32)ws.ws_col;
+  if (rows) *rows = (u32)ws.ws_row;
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_tty_size"
+#endif
+}
+
+///////////////////
+// SP_SYS_IS_TTY //
+///////////////////
+#if defined(SP_WIN32)
+SP_PRIVATE bool sp_sys_tty_win32_is_pty(HANDLE handle) {
+  if (GetFileType(handle) != FILE_TYPE_PIPE) return false;
+
+  struct {
+    FILE_NAME_INFO info;
+    WCHAR tail [SP_PATH_MAX];
+  } raw = sp_zero;
+  if (!GetFileInformationByHandleEx(handle, FileNameInfo, &raw, sizeof(raw))) return false;
+
+  const u16* wide = (const u16*)(const void*)raw.info.FileName;
+  u32 wide_len = (u32)(raw.info.FileNameLength / sizeof(WCHAR));
+  if (wide_len > SP_PATH_MAX) wide_len = SP_PATH_MAX;
+
+  c8 buf [SP_PATH_MAX];
+  sp_for(it, wide_len) {
+    buf[it] = wide[it] < 128 ? (c8)wide[it] : '?';
   }
-  s32 r = (s32)poll(pfds, (nfds_t)nfds, -1);
-  if (r < 0) return -1;
-  s32 count = 0;
-  for (u64 i = 0; i < nfds; i++) {
-    if (pfds[i].revents & (POLLIN | POLLHUP | POLLERR)) {
-      ready[i] = 1;
-      count++;
+
+  sp_str_t name = (sp_str_t) { .data = buf, .len = wide_len };
+  sp_for(it, wide_len) {
+    u32 index = wide_len - 1 - it;
+    if (buf[index] == '\\' || buf[index] == '/') {
+      name = sp_str_sub(name, (s32)index + 1, (s32)(wide_len - index - 1));
+      break;
     }
   }
-  return count;
+
+  bool named = sp_str_starts_with(name, sp_str_lit("msys-")) || sp_str_starts_with(name, sp_str_lit("cygwin-"));
+  return named && sp_str_contains(name, sp_str_lit("-pty"));
+}
+#endif
+
+bool sp_sys_is_tty_p(sp_sys_fd_t fd) {
+#if defined(SP_WIN32)
+  HANDLE handle = (HANDLE)fd;
+  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return false;
+
+  DWORD mode = 0;
+  if (GetConsoleMode(handle, &mode)) return true;
+  return sp_sys_tty_win32_is_pty(handle);
+
+#elif defined(SP_LINUX)
+  sp_termios_t t = sp_zero;
+  return sp_syscall_retry(SP_SYSCALL_NUM_IOCTL, fd, SP_TCGETS, &t) >= 0;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  sp_termios_t t = sp_zero;
+  s32 rc;
+  do {
+    rc = tcgetattr(fd, &t);
+  } while (rc == -1 && errno == SP_EINTR);
+  return rc == 0;
+
+#elif defined(SP_WASM)
+  return false;
+
+#else
+  #error "sp_sys_is_tty"
+#endif
 }
 
+//////////////////////
+// SP_SYS_TTY_READY //
+//////////////////////
+sp_err_t sp_sys_tty_ready_p(sp_sys_fd_t fd, u8* ready) {
+  *ready = 0;
+
+#if defined(SP_WIN32)
+  HANDLE h = (HANDLE)fd;
+  for (;;) {
+    DWORD num_events = 0;
+    if (!GetNumberOfConsoleInputEvents(h, &num_events)) return sp_sys_err_from_win32(GetLastError());
+    if (num_events == 0) return SP_OK;
+
+    INPUT_RECORD rec;
+    DWORD peeked = 0;
+    if (!PeekConsoleInputW(h, &rec, 1, &peeked)) return sp_sys_err_from_win32(GetLastError());
+    if (peeked == 0) return SP_OK;
+    if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) {
+      *ready = 1;
+      return SP_OK;
+    }
+
+    // Consuming non-key-down records de-signals the console handle, so sp_sys_wait
+    // doesn't return hot on key-up/focus records
+    DWORD consumed = 0;
+    if (!ReadConsoleInputW(h, &rec, 1, &consumed)) return sp_sys_err_from_win32(GetLastError());
+    if (consumed == 0) return SP_OK;
+  }
+
+#elif defined(SP_LINUX)
+  sp_sys_linux_pollfd_t pfd = { .fd = fd, .events = SP_SYS_LINUX_POLLIN };
+  sp_sys_timespec_t ts = sp_zero;
+  s64 r = sp_syscall_retry(SP_SYSCALL_NUM_PPOLL, &pfd, 1, &ts, 0, 0);
+  if (r < 0) return sp_sys_err_from_errno(-r);
+  if (r > 0 && (pfd.revents & (SP_SYS_LINUX_POLLIN | SP_SYS_LINUX_POLLHUP | SP_SYS_LINUX_POLLERR))) *ready = 1;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct pollfd pfd = { .fd = fd, .events = POLLIN };
+  s32 r;
+  do {
+    r = (s32)poll(&pfd, 1, 0);
+  } while (r < 0 && errno == EINTR);
+  if (r < 0) return sp_sys_err_from_errno(errno);
+  if (r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) *ready = 1;
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  (void)fd;
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_tty_ready"
 #endif
+}
+
+///////////////////////////
+// SP_SYS_TTY_MODE_APPLY //
+///////////////////////////
+#if defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO)
+SP_PRIVATE void sp_sys_tty_mode_apply_termios(sp_termios_t* t, sp_sys_tty_mode_t mode) {
+  switch (mode) {
+    case SP_SYS_TTY_MODE_COOKED: {
+      t->c_iflag |= (u32)(SP_BRKINT | SP_ICRNL | SP_IXON);
+      t->c_oflag |= (u32)SP_OPOST;
+      t->c_lflag |= (u32)(SP_ECHO | SP_ICANON | SP_IEXTEN | SP_ISIG);
+      break;
+    }
+    case SP_SYS_TTY_MODE_RAW: {
+      t->c_iflag &= (u32)~(SP_BRKINT | SP_ICRNL | SP_INPCK | SP_ISTRIP | SP_IXON);
+      t->c_oflag &= (u32)~(SP_OPOST);
+      t->c_cflag |= (u32)SP_CS8;
+      t->c_lflag &= (u32)~(SP_ECHO | SP_ICANON | SP_IEXTEN | SP_ISIG);
+      t->c_cc[SP_VMIN] = 1;
+      t->c_cc[SP_VTIME] = 0;
+      break;
+    }
+    case SP_SYS_TTY_MODE_NO_ECHO: {
+      t->c_lflag &= (u32)~(SP_ECHO);
+      t->c_lflag |= (u32)(SP_ICANON | SP_ISIG);
+      break;
+    }
+  }
+}
+#endif
+
+sp_err_t sp_sys_tty_mode_apply_p(sp_sys_tty_attr_t* in, sp_sys_tty_attr_t* out, sp_sys_tty_mode_t mode) {
+  if (!in->present) return SP_ERR_SYS_NOT_TTY;
+
+#if defined(SP_WIN32)
+  sp_console_t* console_in = (sp_console_t*)(void*)in->opaque;
+  sp_console_t* console_out = (sp_console_t*)(void*)out->opaque;
+
+  switch (mode) {
+    case SP_SYS_TTY_MODE_COOKED: {
+      console_in->mode |= (u32)(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+      break;
+    }
+    case SP_SYS_TTY_MODE_RAW: {
+      console_in->mode = (u32)ENABLE_VIRTUAL_TERMINAL_INPUT;
+      console_in->input_cp = (u32)CP_UTF8;
+      console_in->output_cp = (u32)CP_UTF8;
+      if (out->present) {
+        console_out->mode |= (u32)(ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        console_out->input_cp = (u32)CP_UTF8;
+        console_out->output_cp = (u32)CP_UTF8;
+      }
+      break;
+    }
+    case SP_SYS_TTY_MODE_NO_ECHO: {
+      console_in->mode &= (u32)~(ENABLE_ECHO_INPUT);
+      console_in->mode |= (u32)(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT);
+      break;
+    }
+  }
+  return SP_OK;
+
+#elif defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO)
+  sp_sys_tty_mode_apply_termios((sp_termios_t*)(void*)in->opaque, mode);
+  if (out->present) sp_sys_tty_mode_apply_termios((sp_termios_t*)(void*)out->opaque, mode);
+  return SP_OK;
+
+#elif defined(SP_WASM)
+  return SP_ERR_SYS_UNSUPPORTED;
+
+#else
+  #error "sp_sys_tty_mode_apply"
+#endif
+}
+
+///////////////////////
+// SP_SYS_TTY_USE_VT //
+///////////////////////
+sp_err_t sp_sys_tty_use_vt_p(sp_sys_fd_t fd) {
+#if defined(SP_WIN32)
+  HANDLE handle = (HANDLE)fd;
+  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return SP_ERR_SYS_BAD_FD;
+  DWORD mode = 0;
+  if (!GetConsoleMode(handle, &mode)) return sp_sys_tty_err_from_win32(GetLastError());
+  if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) return SP_OK;
+  if (!SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+    return sp_sys_tty_err_from_win32(GetLastError());
+  }
+  return SP_OK;
+
+#elif defined(SP_LINUX) || defined(SP_MACOS) || defined(SP_COSMO) || defined(SP_WASM)
+  (void)fd;
+  return SP_OK;
+
+#else
+  #error "sp_sys_tty_use_vt"
+#endif
+}
+
+///////////////////////
+// SP_SYS_SOCKET_WIN32 //
+///////////////////////
+#if defined(SP_WIN32)
+#define SP_WS2_LOAD_FUNCTION(ret, name, args) \
+    ws2->name = (ret (__stdcall*) args)(void(*)(void))GetProcAddress(h, #name);
+
+SP_PRIVATE bool sp_sys_win32_ws2_ensure(void) {
+  static bool ready = false;
+  if (ready) return true;
+
+  HMODULE h = LoadLibraryW(L"ws2_32.dll");
+  if (!h) return false;
+
+  sp_ws2_dispatch_t* ws2 = &sp_rt.ws2;
+  SP_WS2_FUNCTIONS(SP_WS2_LOAD_FUNCTION)
+
+  WSADATA wsa = sp_zero;
+  ws2->WSAStartup(MAKEWORD(2, 2), &wsa);
+  ready = true;
+  return true;
+}
+
+#define SP_SYS_WIN32_SIO_TCP_INITIAL_RTO                          0x98000011
+#define SP_SYS_WIN32_TCP_INITIAL_RTO_UNSPECIFIED_RTT              0xFFFF
+#define SP_SYS_WIN32_TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS       0xFE
+#define SP_SYS_WIN32_BUILD_TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS 16299
+
+SP_PRIVATE bool sp_sys_win32_supports_tcp_fail_fast(void) {
+  static bool cached = false;
+  static bool supported = false;
+  if (cached) return supported;
+  cached = true;
+
+  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  if (!ntdll) return supported;
+  SP_TYPEDEF_FN(LONG, sp_rtl_get_version_fn, OSVERSIONINFOW*);
+  sp_rtl_get_version_fn rtl_get_version = (sp_rtl_get_version_fn)(void*)GetProcAddress(ntdll, "RtlGetVersion");
+  if (!rtl_get_version) return supported;
+  OSVERSIONINFOW info = sp_zero;
+  info.dwOSVersionInfoSize = sizeof(info);
+  if (rtl_get_version(&info) != 0) return supported;
+  supported = info.dwMajorVersion > 10 || (info.dwMajorVersion == 10 && info.dwBuildNumber >= SP_SYS_WIN32_BUILD_TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS);
+  return supported;
+}
+
+typedef struct {
+  u16 rtt;
+  u8  max_syn_retransmissions;
+} sp_sys_win32_tcp_initial_rto_params_t;
+
+SP_PRIVATE void sp_sys_win32_speed_up_loopback_connect(SOCKET fd) {
+  sp_sys_win32_tcp_initial_rto_params_t params = sp_zero;
+  params.rtt = SP_SYS_WIN32_TCP_INITIAL_RTO_UNSPECIFIED_RTT;
+  params.max_syn_retransmissions = sp_sys_win32_supports_tcp_fail_fast() ? SP_SYS_WIN32_TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS : 1;
+  DWORD bytes = 0;
+  sp_rt.ws2.WSAIoctl(fd, SP_SYS_WIN32_SIO_TCP_INITIAL_RTO, &params, sizeof(params), SP_NULLPTR, 0, &bytes, SP_NULLPTR, SP_NULLPTR);
+}
+#endif
+
+//////////////////////
+// SP_SYS_SOCKET_WAIT //
+//////////////////////
+sp_err_t sp_sys_socket_wait_p(sp_sys_socket_t socket, bool readable, u32 timeout_ms) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  WSAPOLLFD pfd = sp_zero;
+  pfd.fd = (SOCKET)socket;
+  pfd.events = readable ? POLLRDNORM : POLLWRNORM;
+  s32 rc = sp_rt.ws2.WSAPoll(&pfd, 1, timeout_ms ? (INT)sp_min(timeout_ms, (u32)SP_LIMIT_S32_MAX) : -1);
+  if (rc < 0) return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  return rc > 0 ? SP_OK : SP_ERR_SYS_TIMED_OUT;
+
+#elif defined(SP_LINUX)
+  u64 deadline_ns = 0;
+  u64 remaining_ns = (u64)timeout_ms * SP_TM_MS_TO_NS;
+  if (timeout_ms) {
+    sp_sys_timespec_t now = sp_zero;
+    sp_syscall(SP_SYSCALL_NUM_CLOCK_GETTIME, SP_CLOCK_MONOTONIC, &now);
+    deadline_ns = sp_sys_ns_from_timespec(now.tv_sec, now.tv_nsec) + remaining_ns;
+  }
+  while (true) {
+    sp_sys_linux_pollfd_t pfd = {
+      .fd = socket,
+      .events = (s16)(readable ? SP_SYS_LINUX_POLLIN : SP_SYS_LINUX_POLLOUT),
+    };
+    sp_sys_timespec_t ts = sp_sys_timespec_from_ns(remaining_ns);
+    s64 rc = sp_syscall(SP_SYSCALL_NUM_PPOLL, &pfd, 1, timeout_ms ? &ts : SP_NULLPTR, 0, 0);
+    if (rc == -SP_EINTR) {
+      if (timeout_ms) {
+        sp_sys_timespec_t now = sp_zero;
+        sp_syscall(SP_SYSCALL_NUM_CLOCK_GETTIME, SP_CLOCK_MONOTONIC, &now);
+        u64 now_ns = sp_sys_ns_from_timespec(now.tv_sec, now.tv_nsec);
+        if (now_ns >= deadline_ns) return SP_ERR_SYS_TIMED_OUT;
+        remaining_ns = deadline_ns - now_ns;
+      }
+      continue;
+    }
+    if (rc < 0) return sp_sys_err_from_errno(-rc);
+    return rc > 0 ? SP_OK : SP_ERR_SYS_TIMED_OUT;
+  }
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  u64 deadline_ns = 0;
+  s32 remaining_ms = timeout_ms ? (s32)sp_min(timeout_ms, (u32)SP_LIMIT_S32_MAX) : -1;
+  if (timeout_ms) {
+    struct timespec now = sp_zero;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    deadline_ns = sp_sys_ns_from_timespec((s64)now.tv_sec, (s64)now.tv_nsec) + (u64)timeout_ms * SP_TM_MS_TO_NS;
+  }
+  while (true) {
+    struct pollfd pfd = { .fd = socket, .events = (s16)(readable ? POLLIN : POLLOUT) };
+    s32 rc = poll(&pfd, 1, remaining_ms);
+    if (rc < 0 && errno == EINTR) {
+      if (timeout_ms) {
+        struct timespec now = sp_zero;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        u64 now_ns = sp_sys_ns_from_timespec((s64)now.tv_sec, (s64)now.tv_nsec);
+        if (now_ns >= deadline_ns) return SP_ERR_SYS_TIMED_OUT;
+        remaining_ms = (s32)sp_min((deadline_ns - now_ns) / SP_TM_MS_TO_NS + 1, (u64)SP_LIMIT_S32_MAX);
+      }
+      continue;
+    }
+    if (rc < 0) return sp_sys_err_from_errno(errno);
+    return rc > 0 ? SP_OK : SP_ERR_SYS_TIMED_OUT;
+  }
+
+#else
+  (void)socket; (void)readable; (void)timeout_ms;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+/////////////////////////////////
+// SP_SYS_SOCKET_SET_NONBLOCKING //
+/////////////////////////////////
+sp_err_t sp_sys_socket_set_nonblocking_p(sp_sys_socket_t socket) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  u_long nonblock = 1;
+  if (sp_rt.ws2.ioctlsocket((SOCKET)socket, FIONBIO, &nonblock) != 0) {
+    return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  }
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 flags = sp_syscall(SP_SYSCALL_NUM_FCNTL, socket, SP_F_GETFL, 0);
+  if (flags < 0) return sp_sys_err_from_errno(-flags);
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_FCNTL, socket, SP_F_SETFL, flags | SP_SYS_LINUX_O_NONBLOCK);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  int flags = fcntl(socket, F_GETFL, 0);
+  if (flags < 0) return sp_sys_err_from_errno(errno);
+  if (fcntl(socket, F_SETFL, flags | O_NONBLOCK) < 0) {
+    return sp_sys_err_from_errno(errno);
+  }
+  return SP_OK;
+
+#else
+  (void)socket;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+//////////////////////////////
+// SP_SYS_SOCKET_REUSE_ADDR //
+//////////////////////////////
+sp_err_t sp_sys_socket_reuse_addr_p(sp_sys_socket_t socket) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  BOOL reuse = TRUE;
+  if (sp_rt.ws2.setsockopt((SOCKET)socket, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) != 0) {
+    return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  }
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s32 reuse = 1;
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_SETSOCKOPT, socket, SP_SYS_LINUX_SOL_SOCKET, SP_SYS_LINUX_SO_REUSEADDR, &reuse, sizeof(reuse));
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  int reuse = 1;
+  if (setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0) {
+    return sp_sys_err_from_errno(errno);
+  }
+  return SP_OK;
+
+#else
+  (void)socket;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+//////////////////////
+// SP_SYS_SOCKET_OPEN //
+//////////////////////
+sp_err_t sp_sys_socket_open_p(sp_sys_socket_t* out, sp_sys_handle_desc_t desc) {
+  *out = SP_SYS_INVALID_SOCKET;
+
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  // socket() creates overlapped sockets; WSASocketW only does so when asked.
+  DWORD flags = WSA_FLAG_OVERLAPPED;
+  if (desc.inherited == SP_SYS_NOT_INHERITED) flags |= WSA_FLAG_NO_HANDLE_INHERIT;
+  SOCKET fd = sp_rt.ws2.WSASocketW(AF_INET, SOCK_STREAM, 0, SP_NULLPTR, 0, flags);
+  if (fd == INVALID_SOCKET) return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  if (desc.mode == SP_SYS_NONBLOCKING) {
+    u_long nonblock = 1;
+    if (sp_rt.ws2.ioctlsocket(fd, FIONBIO, &nonblock) != 0) {
+      sp_err_t err = sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+      sp_rt.ws2.closesocket(fd);
+      return err;
+    }
+  }
+  *out = (sp_sys_socket_t)fd;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  u32 type = SP_SYS_LINUX_SOCK_STREAM | SP_SYS_LINUX_SOCK_CLOEXEC;
+  if (desc.mode == SP_SYS_NONBLOCKING) type |= SP_SYS_LINUX_SOCK_NONBLOCK;
+  s64 fd = sp_syscall(SP_SYSCALL_NUM_SOCKET, SP_SYS_LINUX_AF_INET, type, 0);
+  if (fd < 0) return sp_sys_err_from_errno(-fd);
+  if (desc.inherited == SP_SYS_INHERITED) sp_syscall(SP_SYSCALL_NUM_FCNTL, fd, SP_F_SETFD, 0);
+  *out = (sp_sys_socket_t)fd;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return sp_sys_err_from_errno(errno);
+#if defined(SP_MACOS)
+  int nosigpipe = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
+  if (desc.mode == SP_SYS_NONBLOCKING) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+  if (desc.inherited == SP_SYS_NOT_INHERITED) fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
+  *out = (sp_sys_socket_t)fd;
+  return SP_OK;
+
+#else
+  (void)desc;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+//////////////////////
+// SP_SYS_SOCKET_BIND //
+//////////////////////
+sp_err_t sp_sys_socket_bind_p(sp_sys_socket_t socket, sp_sys_ipv4_t addr) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  struct sockaddr_in sa = sp_zero;
+  sa.sin_family = AF_INET;
+  ((u8*)&sa.sin_port)[0] = (u8)(addr.port >> 8);
+  ((u8*)&sa.sin_port)[1] = (u8)(addr.port & 0xFF);
+  sp_mem_copy(&sa.sin_addr, addr.octets, 4);
+  if (sp_rt.ws2.bind((SOCKET)socket, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+    return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  }
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  sp_sys_linux_sockaddr_in_t sa = sp_zero;
+  sa.family = SP_SYS_LINUX_AF_INET;
+  sa.port[0] = (u8)(addr.port >> 8);
+  sa.port[1] = (u8)(addr.port & 0xFF);
+  sp_mem_copy(sa.addr, addr.octets, 4);
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_BIND, socket, &sa, sizeof(sa));
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct sockaddr_in sa = sp_zero;
+  sa.sin_family = AF_INET;
+  ((u8*)&sa.sin_port)[0] = (u8)(addr.port >> 8);
+  ((u8*)&sa.sin_port)[1] = (u8)(addr.port & 0xFF);
+  sp_mem_copy(&sa.sin_addr, addr.octets, 4);
+  if (bind(socket, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+    return sp_sys_err_from_errno(errno);
+  }
+  return SP_OK;
+
+#else
+  (void)socket; (void)addr;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+////////////////////////
+// SP_SYS_SOCKET_LISTEN //
+////////////////////////
+sp_err_t sp_sys_socket_listen_p(sp_sys_socket_t socket, u32 backlog) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  if (sp_rt.ws2.listen((SOCKET)socket, (int)backlog) != 0) return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_LISTEN, socket, backlog);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  if (listen(socket, (int)backlog) != 0) return sp_sys_err_from_errno(errno);
+  return SP_OK;
+
+#else
+  (void)socket; (void)backlog;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+/////////////////////////
+// SP_SYS_SOCKET_CONNECT //
+/////////////////////////
+sp_err_t sp_sys_socket_connect_p(sp_sys_socket_t socket, sp_sys_ipv4_t addr) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  if (addr.octets[0] == 127) sp_sys_win32_speed_up_loopback_connect((SOCKET)socket);
+
+  struct sockaddr_in sa = sp_zero;
+  sa.sin_family = AF_INET;
+  ((u8*)&sa.sin_port)[0] = (u8)(addr.port >> 8);
+  ((u8*)&sa.sin_port)[1] = (u8)(addr.port & 0xFF);
+  sp_mem_copy(&sa.sin_addr, addr.octets, 4);
+
+  if (sp_rt.ws2.connect((SOCKET)socket, (struct sockaddr*)&sa, sizeof(sa)) == 0) return SP_OK;
+  return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+
+#elif defined(SP_LINUX)
+  sp_sys_linux_sockaddr_in_t sa = sp_zero;
+  sa.family = SP_SYS_LINUX_AF_INET;
+  sa.port[0] = (u8)(addr.port >> 8);
+  sa.port[1] = (u8)(addr.port & 0xFF);
+  sp_mem_copy(sa.addr, addr.octets, 4);
+
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_CONNECT, socket, &sa, sizeof(sa));
+  if (rc == 0) return SP_OK;
+  // EINTR: the attempt proceeds asynchronously; poll for completion as if
+  // EINPROGRESS
+  if (rc == -SP_EINPROGRESS || rc == -SP_EINTR) return SP_ERR_SYS_WOULD_BLOCK;
+  return sp_sys_err_from_errno(-rc);
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct sockaddr_in sa = sp_zero;
+  sa.sin_family = AF_INET;
+  ((u8*)&sa.sin_port)[0] = (u8)(addr.port >> 8);
+  ((u8*)&sa.sin_port)[1] = (u8)(addr.port & 0xFF);
+  sp_mem_copy(&sa.sin_addr, addr.octets, 4);
+
+  if (connect(socket, (struct sockaddr*)&sa, sizeof(sa)) == 0) return SP_OK;
+  if (errno == EINPROGRESS || errno == EINTR) return SP_ERR_SYS_WOULD_BLOCK;
+  return sp_sys_err_from_errno(errno);
+
+#else
+  (void)socket; (void)addr;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+///////////////////////
+// SP_SYS_SOCKET_ERROR //
+///////////////////////
+sp_err_t sp_sys_socket_error_p(sp_sys_socket_t socket) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  int err = 0;
+  int err_len = sizeof(err);
+  if (sp_rt.ws2.getsockopt((SOCKET)socket, SOL_SOCKET, SO_ERROR, (char*)&err, &err_len) != 0) {
+    return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  }
+  return sp_sys_err_from_wsa(err);
+
+#elif defined(SP_LINUX)
+  s32 err = 0;
+  u32 err_len = sizeof(err);
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_GETSOCKOPT, socket, SP_SYS_LINUX_SOL_SOCKET, SP_SYS_LINUX_SO_ERROR, &err, &err_len);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  return sp_sys_err_from_errno(err);
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  int err = 0;
+  socklen_t err_len = sizeof(err);
+  if (getsockopt(socket, SOL_SOCKET, SO_ERROR, &err, &err_len) != 0) {
+    return sp_sys_err_from_errno(errno);
+  }
+  return sp_sys_err_from_errno(err);
+
+#else
+  (void)socket;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+////////////////////////
+// SP_SYS_SOCKET_ACCEPT //
+////////////////////////
+sp_err_t sp_sys_socket_accept_p(sp_sys_socket_t listener, sp_sys_handle_desc_t desc, sp_sys_socket_t* out) {
+  *out = SP_SYS_INVALID_SOCKET;
+
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  while (true) {
+    SOCKET fd = sp_rt.ws2.accept((SOCKET)listener, SP_NULLPTR, SP_NULLPTR);
+    if (fd == INVALID_SOCKET) {
+      s32 e = sp_rt.ws2.WSAGetLastError();
+      if (e == WSAECONNRESET) continue;
+      return sp_sys_err_from_wsa(e);
+    }
+    // Accepted sockets inherit the listener's properties; apply the desc
+    // explicitly in both directions.
+    u_long nonblock = desc.mode == SP_SYS_NONBLOCKING ? 1 : 0;
+    if (sp_rt.ws2.ioctlsocket(fd, FIONBIO, &nonblock) != 0) {
+      sp_err_t err = sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+      sp_rt.ws2.closesocket(fd);
+      return err;
+    }
+    SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, desc.inherited == SP_SYS_INHERITED ? HANDLE_FLAG_INHERIT : 0);
+    *out = (sp_sys_socket_t)fd;
+    return SP_OK;
+  }
+
+#elif defined(SP_LINUX)
+  u32 flags = SP_SYS_LINUX_SOCK_CLOEXEC;
+  if (desc.mode == SP_SYS_NONBLOCKING) flags |= SP_SYS_LINUX_SOCK_NONBLOCK;
+  while (true) {
+    s64 fd = sp_syscall(SP_SYSCALL_NUM_ACCEPT4, listener, 0, 0, flags);
+    if (fd >= 0) {
+      if (desc.inherited == SP_SYS_INHERITED) sp_syscall(SP_SYSCALL_NUM_FCNTL, fd, SP_F_SETFD, 0);
+      *out = (sp_sys_socket_t)fd;
+      return SP_OK;
+    }
+    switch (-fd) {
+      case SP_EINTR:
+      // We got RST while parked in the accept queue, so the only things to do
+      // are (a) retry or (b) return ABORTED to the caller and let them retry.
+      // We don't want to force every caller to encode "ABORTED? Retry", so
+      // we do it.
+      //
+      // I don't think there's a valid response besides retry, caller or callee,
+      // so all you lose is tracking aborted connections. But if you're digging
+      // around in here, this is the only reason sp.h absorbs this error.
+      //
+      // Only these two. The man page's list of already-pending network errors
+      // includes codes that are persistent for a non-stream socket (EOPNOTSUPP),
+      // which turns retry into an infinite spin.
+      case SP_ECONNABORTED: continue;
+      default: return sp_sys_err_from_errno(-fd);
+    }
+  }
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  while (true) {
+    int fd = accept(listener, SP_NULLPTR, SP_NULLPTR);
+    if (fd >= 0) {
+#if defined(SP_MACOS)
+      int nosigpipe = 1;
+      setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
+      int flags = fcntl(fd, F_GETFL);
+      if (desc.mode == SP_SYS_NONBLOCKING) flags |= O_NONBLOCK; else flags &= ~O_NONBLOCK;
+      fcntl(fd, F_SETFL, flags);
+      if (desc.inherited == SP_SYS_NOT_INHERITED) fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
+      *out = (sp_sys_socket_t)fd;
+      return SP_OK;
+    }
+    if (errno == EINTR || errno == ECONNABORTED) continue;
+    return sp_sys_err_from_errno(errno);
+  }
+
+#else
+  (void)listener; (void)desc;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+///////////////////////
+// SP_SYS_SOCKET_CLOSE //
+///////////////////////
+sp_err_t sp_sys_socket_close_p(sp_sys_socket_t socket) {
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  if (sp_rt.ws2.closesocket((SOCKET)socket) != 0) return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 rc = sp_syscall_r(SP_SYSCALL_NUM_CLOSE, socket);
+  switch (rc) {
+    case SP_EINTR:
+    case SP_EINPROGRESS: return SP_OK;
+    default:             return sp_sys_err_from_errno(rc);
+  }
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  if (close(socket)) {
+    switch (errno) {
+      case SP_EINTR:
+      case SP_EINPROGRESS: return SP_OK;
+      default:             return sp_sys_err_from_errno(errno);
+    }
+  }
+  return SP_OK;
+
+#else
+  (void)socket;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+//////////////////////
+// SP_SYS_SOCKET_RECV //
+//////////////////////
+sp_err_t sp_sys_socket_recv_p(sp_sys_socket_t socket, void* ptr, u64 size, u64* bytes_read) {
+  if (bytes_read) *bytes_read = 0;
+
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  s64 rc = sp_rt.ws2.recv((SOCKET)socket, (char*)ptr, (int)sp_min(size, (u64)INT32_MAX), 0);
+  if (rc < 0) return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_RECVFROM, socket, ptr, size, 0, 0, 0);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  s64 rc;
+  do {
+    rc = (s64)recv(socket, ptr, (size_t)size, 0);
+  } while (rc < 0 && errno == EINTR);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (bytes_read) *bytes_read = (u64)rc;
+  return SP_OK;
+
+#else
+  (void)socket; (void)ptr; (void)size;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+//////////////////////
+// SP_SYS_SOCKET_SEND //
+//////////////////////
+sp_err_t sp_sys_socket_send_p(sp_sys_socket_t socket, const void* ptr, u64 size, u64* bytes_written) {
+  if (bytes_written) *bytes_written = 0;
+
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  s64 rc = sp_rt.ws2.send((SOCKET)socket, (const char*)ptr, (int)sp_min(size, (u64)INT32_MAX), 0);
+  if (rc < 0) return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  s64 rc = sp_syscall_retry(SP_SYSCALL_NUM_SENDTO, socket, ptr, size, SP_SYS_LINUX_MSG_NOSIGNAL, 0, 0);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  s64 rc;
+  do {
+    rc = (s64)send(socket, ptr, (size_t)size, 0);
+  } while (rc < 0 && errno == EINTR);
+  if (rc < 0) return sp_sys_err_from_errno(errno);
+  if (bytes_written) *bytes_written = (u64)rc;
+  return SP_OK;
+
+#else
+  (void)socket; (void)ptr; (void)size;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
+
+/////////////////////////////
+// SP_SYS_SOCKET_LOCAL_PORT //
+/////////////////////////////
+sp_err_t sp_sys_socket_local_port_p(sp_sys_socket_t socket, u16* out) {
+  *out = 0;
+
+#if defined(SP_WIN32)
+  if (!sp_sys_win32_ws2_ensure()) return SP_ERR_SYS_UNSUPPORTED;
+  struct sockaddr_in sa = sp_zero;
+  int len = sizeof(sa);
+  if (sp_rt.ws2.getsockname((SOCKET)socket, (struct sockaddr*)&sa, &len) != 0) {
+    return sp_sys_err_from_wsa(sp_rt.ws2.WSAGetLastError());
+  }
+  *out = (u16)((((u8*)&sa.sin_port)[0] << 8) | ((u8*)&sa.sin_port)[1]);
+  return SP_OK;
+
+#elif defined(SP_LINUX)
+  sp_sys_linux_sockaddr_in_t sa = sp_zero;
+  u32 len = sizeof(sa);
+  s64 rc = sp_syscall(SP_SYSCALL_NUM_GETSOCKNAME, socket, &sa, &len);
+  if (rc < 0) return sp_sys_err_from_errno(-rc);
+  *out = (u16)((sa.port[0] << 8) | sa.port[1]);
+  return SP_OK;
+
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  struct sockaddr_in sa = sp_zero;
+  socklen_t len = sizeof(sa);
+  if (getsockname(socket, (struct sockaddr*)&sa, &len) != 0) {
+    return sp_sys_err_from_errno(errno);
+  }
+  *out = (u16)((((u8*)&sa.sin_port)[0] << 8) | ((u8*)&sa.sin_port)[1]);
+  return SP_OK;
+
+#else
+  (void)socket;
+  return SP_ERR_SYS_UNSUPPORTED;
+#endif
+}
 
 ////////////////
 // SP_SYS_MEM //
@@ -5936,52 +9794,52 @@ s32 memcmp(const void* va, const void* vb, size_t n) {
 #endif
 
 #if defined(SP_MACOS) || defined(SP_COSMO) || defined(SP_LINUX) || defined(SP_WIN32)
-void* sp_sys_memcpy(void* dest, const void* src, u64 n) {
+void* sp_sys_memcpy_p(void* dest, const void* src, u64 n) {
   return memcpy(dest, src, n);
 }
 
-void* sp_sys_memmove(void* dest, const void* src, u64 n) {
+void* sp_sys_memmove_p(void* dest, const void* src, u64 n) {
   return memmove(dest, src, n);
 }
 
-void* sp_sys_memset(void* dest, u8 fill, u64 n) {
+void* sp_sys_memset_p(void* dest, u8 fill, u64 n) {
   return memset(dest, fill, n);
 }
 
-s32 sp_sys_memcmp(const void* a, const void* b, u64 n) {
+s32 sp_sys_memcmp_p(const void* a, const void* b, u64 n) {
   return memcmp(a, b, n);
 }
 #elif defined(SP_WASM)
-void* sp_sys_memcpy(void* dest, const void* src, u64 n) {
+void* sp_sys_memcpy_p(void* dest, const void* src, u64 n) {
   return memcpy(dest, src, (u32)n);
 }
 
-void* sp_sys_memmove(void* dest, const void* src, u64 n) {
+void* sp_sys_memmove_p(void* dest, const void* src, u64 n) {
   return memmove(dest, src, (u32)n);
 }
 
-void* sp_sys_memset(void* dest, u8 fill, u64 n) {
+void* sp_sys_memset_p(void* dest, u8 fill, u64 n) {
   return memset(dest, fill, (u32)n);
 }
 
-s32 sp_sys_memcmp(const void* a, const void* b, u64 n) {
+s32 sp_sys_memcmp_p(const void* a, const void* b, u64 n) {
   return memcmp(a, b, (u32)n);
 }
 
 #else
-void* sp_sys_memcpy(void* dest, const void* src, size_t n) {
+void* sp_sys_memcpy_p(void* dest, const void* src, size_t n) {
   #error "sp_sys_memcpy"
 }
 
-void* sp_sys_memmove(void* dest, const void* src, size_t n) {
+void* sp_sys_memmove_p(void* dest, const void* src, size_t n) {
   #error "sp_sys_memmove"
 }
 
-void* sp_sys_memset(void* dest, s32 c, u64 n) {
+void* sp_sys_memset_p(void* dest, s32 c, u64 n) {
   #error "sp_sys_memset"
 }
 
-s32 sp_sys_memcmp(const void* a, const void* b, u64 n) {
+s32 sp_sys_memcmp_p(const void* a, const void* b, u64 n) {
   #error "sp_sys_memcmp"
 }
 
@@ -5991,38 +9849,38 @@ s32 sp_sys_memcmp(const void* a, const void* b, u64 n) {
 // SP_SYS_ALLOC //
 //////////////////
 #if defined(SP_WIN32)
-void* sp_sys_alloc(u64 size) {
+void* sp_sys_alloc_p(u64 size) {
   return VirtualAlloc(SP_NULLPTR, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 }
 
-void sp_sys_free(void* ptr, u64 size) {
+void sp_sys_free_p(void* ptr, u64 size) {
   (void)size;
   if (ptr) VirtualFree(ptr, 0, MEM_RELEASE);
 }
 
 #elif defined(SP_LINUX)
-void* sp_sys_alloc(u64 size) {
-  void* p = (void*)sp_syscall(SP_SYSCALL_NUM_MMAP, 0, size, SP_PROT_READ | SP_PROT_WRITE, SP_MAP_PRIVATE | SP_MAP_ANONYMOUS, -1, 0);
-  return p == SP_MAP_FAILED ? 0 : p;
+void* sp_sys_alloc_p(u64 size) {
+  s64 p = sp_syscall(SP_SYSCALL_NUM_MMAP, 0, size, SP_PROT_READ | SP_PROT_WRITE, SP_MAP_PRIVATE | SP_MAP_ANONYMOUS, -1, 0);
+  return (u64)p > -4096UL ? SP_NULLPTR : (void*)p;
 }
 
-void sp_sys_free(void* ptr, u64 size) {
+void sp_sys_free_p(void* ptr, u64 size) {
   if (!ptr) return;
   sp_syscall(SP_SYSCALL_NUM_MUNMAP, ptr, size);
 }
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-void* sp_sys_alloc(u64 size) {
+void* sp_sys_alloc_p(u64 size) {
   void* p = mmap(SP_NULLPTR, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   return p == MAP_FAILED ? SP_NULLPTR : p;
 }
 
-void sp_sys_free(void* ptr, u64 size) {
+void sp_sys_free_p(void* ptr, u64 size) {
   if (ptr) munmap(ptr, size);
 }
 
 #elif defined(SP_WASM)
-void* sp_sys_alloc(u64 size) {
+void* sp_sys_alloc_p(u64 size) {
   const u64 page_size = 65536;
   u64 pages = (size + page_size - 1) / page_size;
   s32 prev = __builtin_wasm_memory_grow(0, (s32)pages);
@@ -6030,7 +9888,7 @@ void* sp_sys_alloc(u64 size) {
   return (void*)((u64)prev * page_size);
 }
 
-void sp_sys_free(void* ptr, u64 size) {
+void sp_sys_free_p(void* ptr, u64 size) {
   sp_unused(ptr); sp_unused(size);
 }
 
@@ -6042,7 +9900,7 @@ void sp_sys_free(void* ptr, u64 size) {
 ///////////////////
 // SP_SYS_ASSERT //
 ///////////////////
-void sp_sys_assert(bool cond) {
+void sp_sys_assert_p(bool cond) {
   if (cond) return;
 
   #if defined(SP_CLANG)
@@ -6098,16 +9956,16 @@ s32 sp_sys_set_tp(void* tp) {
 // SP_SYS_EXIT //
 /////////////////
 #if defined(SP_FREESTANDING)
-void sp_sys_exit(s32 code) {
+void sp_sys_exit_p(s32 code) {
   sp_syscall(SP_SYSCALL_NUM_EXIT_GROUP, code);
   __builtin_unreachable();
 }
 #elif defined(SP_WASM)
-void sp_sys_exit(s32 code) {
+void sp_sys_exit_p(s32 code) {
   __wasi_proc_exit((u32)code);
 }
 #else
-void sp_sys_exit(s32 code) {
+void sp_sys_exit_p(s32 code) {
   exit(code);
 }
 #endif
@@ -6125,488 +9983,547 @@ void sp_sys_tls_init(sp_tls_rt_t* tls) {
 #endif
 
 /////////////////
-// SP_SYS_INIT //
-/////////////////
-void sp_sys_init() {
-#if defined(SP_WASM)
-
-#else
-#endif
-}
-
-/////////////////
 // SP_SYS_STAT //
 /////////////////
-s32 sp_sys_get_path_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_get_path_metadata_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st) {
 #if defined(SP_WIN32)
   return sp_sys_file_meta_from_nt_path(fd, sp_str(path, len), st, true);
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  sp_sys_linux_stat_t raw = sp_zero;
-  s32 rc = (s32)sp_syscall(SP_SYSCALL_NUM_NEWFSTATAT, fd, buf, &raw, 0);
-  if (rc == 0) sp_sys_file_meta_from_linux(&raw, st);
-  return rc;
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  sp_sys_linux_statx_t stx = sp_zero;
+  sp_try(sp_syscall_e(SP_SYSCALL_NUM_STATX, fd, buf, 0, SP_SYS_LINUX_STATX_BASIC_STATS | SP_SYS_LINUX_STATX_BTIME, &stx));
+  sp_sys_file_meta_from_statx(&stx, st);
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
   struct stat native;
-  s32 rc = fstatat((int)fd, buf, &native, 0);
-  if (rc == 0) sp_sys_file_meta_from_libc(&native, st);
-  return rc;
+  sp_try(sp_sys_err_from_libc(fstatat(fd, buf, &native, 0)));
+  if (path[len - 1] == '/' && !S_ISDIR(native.st_mode)) return SP_ERR_SYS_NOT_DIR;
+  sp_sys_file_meta_from_libc(&native, st);
+  return SP_OK;
 
 #elif defined(SP_WASM)
   (void)fd; (void)path; (void)len; (void)st;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_get_path_metadata"
 #endif
 }
 
-s32 sp_sys_get_path_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_get_path_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st) {
   return sp_sys_get_path_metadata(fd, path.data, path.len, st);
 }
 
 //////////////////
 // SP_SYS_LSTAT //
 //////////////////
-s32 sp_sys_get_link_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_get_link_metadata_p(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st) {
 #if defined(SP_WIN32)
   return sp_sys_file_meta_from_nt_path(fd, sp_str(path, len), st, false);
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  sp_sys_linux_stat_t raw = sp_zero;
-  s32 rc = (s32)sp_syscall(SP_SYSCALL_NUM_NEWFSTATAT, fd, buf, &raw, SP_AT_SYMLINK_NOFOLLOW);
-  if (rc == 0) sp_sys_file_meta_from_linux(&raw, st);
-  return rc;
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  sp_sys_linux_statx_t stx = sp_zero;
+  sp_try(sp_syscall_e(SP_SYSCALL_NUM_STATX, fd, buf, SP_AT_SYMLINK_NOFOLLOW, SP_SYS_LINUX_STATX_BASIC_STATS | SP_SYS_LINUX_STATX_BTIME, &stx));
+  sp_sys_file_meta_from_statx(&stx, st);
+  return SP_OK;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
   struct stat native;
-  s32 rc = fstatat((int)fd, buf, &native, AT_SYMLINK_NOFOLLOW);
-  if (rc == 0) sp_sys_file_meta_from_libc(&native, st);
-  return rc;
+  sp_try(sp_sys_err_from_libc(fstatat(fd, buf, &native, AT_SYMLINK_NOFOLLOW)));
+  if (path[len - 1] == '/' && !S_ISDIR(native.st_mode)) return SP_ERR_SYS_NOT_DIR;
+  sp_sys_file_meta_from_libc(&native, st);
+  return SP_OK;
 
 #elif defined(SP_WASM)
   (void)fd; (void)path; (void)len; (void)st;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_get_link_metadata"
 #endif
 }
 
-s32 sp_sys_get_link_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_get_link_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st) {
   return sp_sys_get_link_metadata(fd, path.data, path.len, st);
 }
 
 //////////////////
 // SP_SYS_MKDIR //
 //////////////////
-s32 sp_sys_mkdir(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode) {
+sp_err_t sp_sys_mkdir_p(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode) {
 #if defined(SP_WIN32)
   (void)mode;
-  void* handle = sp_sys_nt_open(
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(
     fd,
     sp_str(path, len),
     FILE_LIST_DIRECTORY | SYNCHRONIZE,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
     SP_NT_FILE_CREATE,
     SP_NT_FILE_DIRECTORY_FILE | SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT,
-    FILE_ATTRIBUTE_DIRECTORY
+    FILE_ATTRIBUTE_DIRECTORY,
+    &handle
   );
-  if (!handle) return -1;
-  SP_NT(NtClose)(handle);
-  return 0;
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+  sp_sys_nt_close(handle);
+  return SP_OK;
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_MKDIRAT, fd, buf, mode);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  return sp_syscall_e(SP_SYSCALL_NUM_MKDIRAT, fd, buf, mode);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return mkdirat((int)fd, buf, (mode_t)mode);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, sp_sys_posix_trim_slashes(path, len), buf));
+  return sp_sys_err_from_libc(mkdirat(fd, buf, (mode_t)mode));
 
 #elif defined(SP_WASM)
   (void)fd; (void)path; (void)len; (void)mode;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_mkdir"
 #endif
 }
 
-s32 sp_sys_mkdir_s(sp_sys_fd_t fd, sp_str_t path, s32 mode) {
+sp_err_t sp_sys_mkdir_s(sp_sys_fd_t fd, sp_str_t path, s32 mode) {
   return sp_sys_mkdir(fd, path.data, path.len, mode);
 }
 
 //////////////////
 // SP_SYS_RMDIR //
 //////////////////
-s32 sp_sys_rmdir(sp_sys_fd_t fd, const c8* path, u32 len) {
+sp_err_t sp_sys_rmdir_p(sp_sys_fd_t fd, const c8* path, u32 len) {
 #if defined(SP_WIN32)
-  void* handle = sp_sys_nt_open(
-    fd,
-    sp_str(path, len),
-    DELETE | SYNCHRONIZE,
-    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-    SP_NT_FILE_OPEN,
-    SP_NT_FILE_DIRECTORY_FILE | SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_DELETE_ON_CLOSE | SP_NT_FILE_OPEN_REPARSE_POINT,
-    0
-  );
-  if (!handle) return -1;
-  SP_NT(NtClose)(handle);
-  return 0;
+  return sp_sys_nt_delete(fd, sp_str(path, len), true);
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_UNLINKAT, fd, buf, SP_AT_REMOVEDIR);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  return sp_syscall_e(SP_SYSCALL_NUM_UNLINKAT, fd, buf, SP_AT_REMOVEDIR);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return unlinkat((int)fd, buf, AT_REMOVEDIR);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, sp_sys_posix_trim_slashes(path, len), buf));
+  return sp_sys_err_from_libc(unlinkat(fd, buf, AT_REMOVEDIR));
 
 #elif defined(SP_WASM)
   (void)fd; (void)path; (void)len;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_rmdir"
 #endif
 }
 
-s32 sp_sys_rmdir_s(sp_sys_fd_t fd, sp_str_t path) {
+sp_err_t sp_sys_rmdir_s(sp_sys_fd_t fd, sp_str_t path) {
   return sp_sys_rmdir(fd, path.data, path.len);
 }
 
 ///////////////////
 // SP_SYS_UNLINK //
 ///////////////////
-s32 sp_sys_unlink(sp_sys_fd_t fd, const c8* path, u32 len) {
+sp_err_t sp_sys_unlink_p(sp_sys_fd_t fd, const c8* path, u32 len) {
 #if defined(SP_WIN32)
-  void* handle = sp_sys_nt_open(
-    fd,
-    sp_str(path, len),
-    DELETE | SYNCHRONIZE,
-    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-    SP_NT_FILE_OPEN,
-    SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_DELETE_ON_CLOSE | SP_NT_FILE_NON_DIRECTORY_FILE | SP_NT_FILE_OPEN_REPARSE_POINT,
-    0
-  );
-  if (!handle) return -1;
-  SP_NT(NtClose)(handle);
-  return 0;
+  sp_str_t full = sp_str(path, len);
+  sp_str_t trimmed = sp_fs_trim_path(full);
+  if (trimmed.len != full.len) {
+    sp_sys_file_meta_t meta = sp_zero;
+    sp_try(sp_sys_file_meta_from_nt_path(fd, trimmed, &meta, false));
+    return meta.kind == SP_FS_KIND_DIR ? SP_ERR_SYS_IS_DIR : SP_ERR_SYS_NOT_DIR;
+  }
+  return sp_sys_nt_delete(fd, full, false);
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_UNLINKAT, fd, buf, 0);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  return sp_syscall_e(SP_SYSCALL_NUM_UNLINKAT, fd, buf, 0);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return unlinkat((int)fd, buf, 0);
+  c8 buf [SP_PATH_MAX];
+  u32 n = sp_sys_posix_trim_slashes(path, len);
+  sp_try(sp_sys_posix_path(path, n, buf));
+
+  if (n != len) {
+    struct stat st;
+    sp_try(sp_sys_err_from_libc(fstatat(fd, buf, &st, AT_SYMLINK_NOFOLLOW)));
+    return S_ISDIR(st.st_mode) ? SP_ERR_SYS_IS_DIR : SP_ERR_SYS_NOT_DIR;
+  }
+
+  s32 rc = unlinkat(fd, buf, 0);
+  if (rc < 0 && errno == SP_EPERM) {
+    // If the handle is a directory, macOS reports EPERM. But we can't
+    // just normalize that, because other errors ALSO report EPERM, so
+    // we have to issue another syscall to check
+    struct stat st;
+    if (fstatat(fd, buf, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode)) return SP_ERR_SYS_IS_DIR;
+    return SP_ERR_SYS_ACCESS_DENIED;
+  }
+  return sp_sys_err_from_libc(rc);
 
 #elif defined(SP_WASM)
   (void)fd; (void)path; (void)len;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_unlink"
 #endif
 }
 
-s32 sp_sys_unlink_s(sp_sys_fd_t fd, sp_str_t path) {
+sp_err_t sp_sys_unlink_s(sp_sys_fd_t fd, sp_str_t path) {
   return sp_sys_unlink(fd, path.data, path.len);
 }
 
 //////////////////
 // SP_SYS_CHDIR //
 //////////////////
-s32 sp_sys_chdir(const c8* path, u32 len) {
+sp_err_t sp_sys_chdir_p(const c8* path, u32 len) {
 #if defined(SP_WIN32)
+  if (!len) return SP_ERR_SYS_NOT_FOUND;
+  if (len >= SP_PATH_MAX) return SP_ERR_SYS_NAME_TOO_LONG;
   SP_ALIGNED u16 wbuf[SP_PATH_MAX + 1];
   sp_mem_fixed_t fixed = sp_mem_fixed(wbuf, sizeof(wbuf));
-  sp_wide_str_t w = sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&fixed), sp_str(path, len));
-  if (!w.data) return -1;
+  sp_wide_str_t w;
+  sp_try(sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&fixed), sp_str(path, len), &w));
   sp_nt_unicode_string_t us = {
     .Length = sp_cast(u16, w.len * sizeof(u16)),
     .MaximumLength = sp_cast(u16, (w.len + 1) * sizeof(u16)),
     .Buffer = sp_ptr_cast(u16*, sp_const_cast(u16*, w.data)),
   };
-  return SP_NT_SUCCESS(SP_NT(RtlSetCurrentDirectory_U)(&us)) ? 0 : -1;
+  return sp_sys_err_from_nt(SP_NT(RtlSetCurrentDirectory_U)(&us));
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_CHDIR, buf);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  return sp_syscall_e(SP_SYSCALL_NUM_CHDIR, buf);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return chdir(buf);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  return sp_sys_err_from_libc(chdir(buf));
 
 #elif defined(SP_WASM)
   (void)path; (void)len;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_chdir"
 #endif
 }
 
-s32 sp_sys_chdir_s(sp_str_t path) {
+sp_err_t sp_sys_chdir_s(sp_str_t path) {
   return sp_sys_chdir(path.data, path.len);
 }
 
 /////////////////
 // SP_SYS_LINK //
 /////////////////
-s32 sp_sys_link(sp_sys_fd_t from_fd, const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len) {
+sp_err_t sp_sys_link_p(sp_sys_fd_t from_fd, const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len) {
 #if defined(SP_WIN32)
-  void* handle = sp_sys_nt_open(
-    from_fd,
-    sp_str(existing, existing_len),
+  return sp_sys_nt_set_name_info(
+    from_fd, sp_str(existing, existing_len),
+    to_fd, sp_str(alias, alias_len),
     FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-    SP_NT_FILE_OPEN,
-    SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_REPARSE_POINT,
+    0,
+    SP_NT_FILE_LINK_INFORMATION,
     0
   );
-  if (!handle) return -1;
-
-  SP_ALIGNED u16 path_buf[SP_PATH_MAX + 1];
-  sp_sys_nt_target_t t;
-  if (!SP_NT_SUCCESS(sp_sys_nt_target(to_fd, sp_str(alias, alias_len), path_buf, SP_PATH_MAX + 1, &t))) {
-    SP_NT(NtClose)(handle);
-    return -1;
-  }
-
-  u32 name_bytes = t.name.Length;
-  u32 info_bytes = sizeof(sp_nt_file_link_information_t) + name_bytes - sizeof(u16);
-  SP_ALIGNED u8 info_buf[sizeof(sp_nt_file_link_information_t) + SP_PATH_MAX * sizeof(u16)];
-  if (info_bytes > sizeof(info_buf)) {
-    sp_sys_nt_target_free(&t);
-    SP_NT(NtClose)(handle);
-    return -1;
-  }
-  sp_nt_file_link_information_t* info = (sp_nt_file_link_information_t*)info_buf;
-  *info = sp_zero_s(sp_nt_file_link_information_t);
-  info->ReplaceIfExists = 0;
-  info->RootDirectory = t.root;
-  info->FileNameLength = name_bytes;
-  sp_mem_copy(info->FileName, t.name.Buffer, name_bytes);
-
-  sp_nt_io_status_block_t iosb = sp_zero;
-  sp_nt_status_t status = SP_NT(NtSetInformationFile)(handle, &iosb, info, info_bytes, SP_NT_FILE_LINK_INFORMATION);
-
-  sp_sys_nt_target_free(&t);
-  SP_NT(NtClose)(handle);
-
-  return SP_NT_SUCCESS(status) ? 0 : -1;
 
 #elif defined(SP_LINUX)
   struct {
     c8 existing [SP_PATH_MAX];
     c8 alias [SP_PATH_MAX];
-  } buffers = sp_zero;
-  sp_cstr_copy_to_n(existing, existing_len, buffers.existing, SP_PATH_MAX);
-  sp_cstr_copy_to_n(alias, alias_len, buffers.alias, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_LINKAT, from_fd, buffers.existing, to_fd, buffers.alias, 0);
+  } buffers;
+  sp_try(sp_sys_posix_path(existing, existing_len, buffers.existing));
+  sp_try(sp_sys_posix_path(alias, alias_len, buffers.alias));
+  return sp_syscall_e(SP_SYSCALL_NUM_LINKAT, from_fd, buffers.existing, to_fd, buffers.alias, 0);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   struct {
     c8 existing [SP_PATH_MAX];
     c8 alias [SP_PATH_MAX];
-  } buffers = sp_zero;
-  sp_cstr_copy_to_n(existing, existing_len, buffers.existing, SP_PATH_MAX);
-  sp_cstr_copy_to_n(alias, alias_len, buffers.alias, SP_PATH_MAX);
-  return linkat((int)from_fd, buffers.existing, (int)to_fd, buffers.alias, 0);
+  } buffers;
+  sp_try(sp_sys_posix_path(existing, existing_len, buffers.existing));
+  sp_try(sp_sys_posix_path(alias, alias_len, buffers.alias));
+  return sp_sys_err_from_libc(linkat(from_fd, buffers.existing, to_fd, buffers.alias, 0));
 
 #elif defined(SP_WASM)
   (void)from_fd; (void)existing; (void)existing_len; (void)to_fd; (void)alias; (void)alias_len;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_link"
 #endif
 }
 
-s32 sp_sys_link_s(sp_sys_fd_t from_fd, sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias) {
+sp_err_t sp_sys_link_s(sp_sys_fd_t from_fd, sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias) {
   return sp_sys_link(from_fd, existing.data, existing.len, to_fd, alias.data, alias.len);
 }
 
 ////////////////////
 // SP_SYS_SYMLINK //
 ////////////////////
-s32 sp_sys_symlink(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len) {
+sp_err_t sp_sys_symlink_p(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len) {
 #if defined(SP_WIN32)
-  (void)to_fd;
-  SP_ALIGNED struct {
-    u16 target [SP_PATH_MAX + 1];
-    u16 link [SP_PATH_MAX + 1];
-  } bufs;
-  sp_mem_fixed_t target_fixed = sp_mem_fixed(bufs.target, sizeof(bufs.target));
-  sp_mem_fixed_t link_fixed = sp_mem_fixed(bufs.link, sizeof(bufs.link));
-  sp_wide_str_t wtarget = sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&target_fixed), sp_str(existing, existing_len));
-  sp_wide_str_t wlink = sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&link_fixed), sp_str(alias, alias_len));
-  if (!wtarget.data || !wlink.data) return -1;
+  sp_str_t target = sp_str(existing, existing_len);
+  sp_str_t link = sp_str(alias, alias_len);
+  if (sp_str_empty(target)) return SP_ERR_SYS_INVALID;
+  if (target.len >= SP_PATH_MAX) return SP_ERR_SYS_NAME_TOO_LONG;
 
-  DWORD flags = 0;
-  DWORD target_attrs = GetFileAttributesW((LPCWSTR)wtarget.data);
-  if (target_attrs != INVALID_FILE_ATTRIBUTES && (target_attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-    flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+  SP_ALIGNED u16 wtarget_buf [SP_PATH_MAX + 1];
+  sp_mem_fixed_t target_fixed = sp_mem_fixed(wtarget_buf, sizeof(wtarget_buf));
+  sp_wide_str_t wtarget;
+  sp_try(sp_wtf8_to_wtf16(sp_mem_fixed_as_allocator(&target_fixed), target, &wtarget));
+
+  u16* wt = (u16*)wtarget.data;
+  sp_for(it, wtarget.len) {
+    if (wt[it] == '/') wt[it] = '\\';
   }
-  #ifdef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
-    flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
-  #endif
-  return CreateSymbolicLinkW((LPCWSTR)wlink.data, (LPCWSTR)wtarget.data, flags) ? 0 : -1;
+
+  bool absolute =
+    (wtarget.len >= 3 && wt[1] == ':' && wt[2] == '\\') ||
+    (wtarget.len >= 2 && wt[0] == '\\' && wt[1] == '\\');
+
+  u32 dir_option = SP_NT_FILE_NON_DIRECTORY_FILE;
+  {
+    c8 probe_buf [SP_PATH_MAX];
+    sp_str_t probe = target;
+    if (!absolute) {
+      u32 parent_len = 0;
+      sp_for(it, link.len) {
+        if (link.data[it] == '/' || link.data[it] == '\\') parent_len = (u32)it + 1;
+      }
+      if ((u64)parent_len + target.len <= sizeof(probe_buf)) {
+        sp_mem_copy(probe_buf, link.data, parent_len);
+        sp_mem_copy(probe_buf + parent_len, target.data, target.len);
+        probe = sp_str(probe_buf, parent_len + target.len);
+      }
+    }
+    sp_sys_file_meta_t meta = sp_zero;
+    if (!sp_sys_file_meta_from_nt_path(to_fd, probe, &meta, true) && meta.kind == SP_FS_KIND_DIR) {
+      dir_option = SP_NT_FILE_DIRECTORY_FILE;
+    }
+  }
+
+  sp_wide_str_t stored = wtarget;
+  sp_sys_nt_path_t nt_path = sp_zero;
+  if (absolute) {
+    sp_nt_status_t pstatus = sp_sys_nt_path(target, &nt_path);
+    if (!SP_NT_SUCCESS(pstatus)) return sp_sys_err_from_nt(pstatus);
+    stored.data = nt_path.name.Buffer;
+    stored.len = nt_path.name.Length / (u32)sizeof(u16);
+  }
+
+  u32 name_bytes = stored.len * (u32)sizeof(u16);
+  u32 rdb_len = (u32)sizeof(sp_nt_symlink_reparse_buffer_t) + name_bytes * 2;
+  SP_ALIGNED u8 rdb_buf [SP_NT_MAX_REPARSE_DATA];
+  if (rdb_len > sizeof(rdb_buf)) {
+    return SP_ERR_SYS_NAME_TOO_LONG;
+  }
+
+  sp_nt_symlink_reparse_buffer_t* rdb = (sp_nt_symlink_reparse_buffer_t*)rdb_buf;
+  *rdb = sp_zero_s(sp_nt_symlink_reparse_buffer_t);
+  rdb->ReparseTag = SP_NT_IO_REPARSE_TAG_SYMLINK;
+  rdb->ReparseDataLength = (u16)(rdb_len - 8);
+  rdb->SubstituteNameOffset = (u16)name_bytes;
+  rdb->SubstituteNameLength = (u16)name_bytes;
+  rdb->PrintNameOffset = 0;
+  rdb->PrintNameLength = (u16)name_bytes;
+  rdb->Flags = absolute ? 0 : SP_NT_SYMLINK_FLAG_RELATIVE;
+  sp_mem_copy(rdb_buf + sizeof(sp_nt_symlink_reparse_buffer_t), stored.data, name_bytes);
+  sp_mem_copy(rdb_buf + sizeof(sp_nt_symlink_reparse_buffer_t) + name_bytes, stored.data, name_bytes);
+
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(to_fd, link,
+    DELETE | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
+    0,
+    SP_NT_FILE_CREATE,
+    SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_REPARSE_POINT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT | dir_option,
+    FILE_ATTRIBUTE_NORMAL,
+    &handle
+  );
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+
+  sp_nt_io_status_block_t iosb = sp_zero;
+  status = SP_NT(NtFsControlFile)(
+    (void*)handle, SP_NULLPTR, SP_NULLPTR, SP_NULLPTR, &iosb,
+    SP_NT_FSCTL_SET_REPARSE_POINT, rdb_buf, rdb_len, SP_NULLPTR, 0
+  );
+
+  if (!SP_NT_SUCCESS(status)) {
+    sp_nt_file_disposition_information_t info = { .DeleteFile = 1 };
+    sp_nt_io_status_block_t diosb = sp_zero;
+    SP_NT(NtSetInformationFile)((void*)handle, &diosb, &info, sizeof(info), SP_NT_FILE_DISPOSITION_INFORMATION);
+  }
+
+  sp_sys_nt_close(handle);
+
+  switch (status) {
+    case SP_NT_STATUS_INVALID_DEVICE_REQUEST: return SP_ERR_SYS_UNSUPPORTED;
+    default:                                  return sp_sys_err_from_nt(status);
+  }
 
 #elif defined(SP_LINUX)
   struct {
     c8 existing [SP_PATH_MAX];
     c8 alias [SP_PATH_MAX];
-  } buffers = sp_zero;
-  sp_cstr_copy_to_n(existing, existing_len, buffers.existing, SP_PATH_MAX);
-  sp_cstr_copy_to_n(alias, alias_len, buffers.alias, SP_PATH_MAX);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_SYMLINKAT, buffers.existing, to_fd, buffers.alias);
+  } buffers;
+  sp_try(sp_sys_posix_path(existing, existing_len, buffers.existing));
+  sp_try(sp_sys_posix_path(alias, alias_len, buffers.alias));
+  return sp_syscall_e(SP_SYSCALL_NUM_SYMLINKAT, buffers.existing, to_fd, buffers.alias);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   struct {
     c8 existing [SP_PATH_MAX];
     c8 alias [SP_PATH_MAX];
-  } buffers = sp_zero;
-  sp_cstr_copy_to_n(existing, existing_len, buffers.existing, SP_PATH_MAX);
-  sp_cstr_copy_to_n(alias, alias_len, buffers.alias, SP_PATH_MAX);
-  return symlinkat(buffers.existing, (int)to_fd, buffers.alias);
+  } buffers;
+  sp_try(sp_sys_posix_path(existing, existing_len, buffers.existing));
+  sp_try(sp_sys_posix_path(alias, alias_len, buffers.alias));
+  return sp_sys_err_from_libc(symlinkat(buffers.existing, to_fd, buffers.alias));
 
 #elif defined(SP_WASM)
   (void)existing; (void)existing_len; (void)to_fd; (void)alias; (void)alias_len;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_symlink"
 #endif
 }
 
-s32 sp_sys_symlink_s(sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias) {
+sp_err_t sp_sys_symlink_s(sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias) {
   return sp_sys_symlink(existing.data, existing.len, to_fd, alias.data, alias.len);
 }
 
 //////////////////
 // SP_SYS_CHMOD //
 //////////////////
-s32 sp_sys_chmod(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_chmod_p(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st) {
 #if defined(SP_WIN32)
-  void* handle = sp_sys_nt_open(
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  sp_nt_status_t status = sp_sys_nt_open(
     fd,
     sp_str(path, len),
     FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
     SP_NT_FILE_OPEN,
     SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_REPARSE_POINT,
-    0
+    0,
+    &handle
   );
-  if (!handle) return -1;
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
 
   sp_nt_file_basic_information_t info = sp_zero;
   info.FileAttributes = st->raw_attrs ? st->raw_attrs : FILE_ATTRIBUTE_NORMAL;
 
   sp_nt_io_status_block_t iosb = sp_zero;
-  sp_nt_status_t status = SP_NT(NtSetInformationFile)(handle, &iosb, &info, sizeof(info), SP_NT_FILE_BASIC_INFORMATION);
+  status = SP_NT(NtSetInformationFile)((void*)handle, &iosb, &info, sizeof(info), SP_NT_FILE_BASIC_INFORMATION);
 
-  SP_NT(NtClose)(handle);
-  return SP_NT_SUCCESS(status) ? 0 : -1;
+  sp_sys_nt_close(handle);
+  return sp_sys_err_from_nt(status);
 
 #elif defined(SP_LINUX)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
   s32 mode = (s32)(st->raw_attrs & 07777);
-  return (s32)sp_syscall(SP_SYSCALL_NUM_FCHMODAT, fd, buf, mode, 0);
+  return sp_syscall_e(SP_SYSCALL_NUM_FCHMODAT, fd, buf, mode, 0);
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-  c8 buf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, buf, SP_PATH_MAX);
-  return fchmodat((int)fd, buf, (mode_t)(st->raw_attrs & 07777), 0);
+  c8 buf [SP_PATH_MAX];
+  sp_try(sp_sys_posix_path(path, len, buf));
+  return sp_sys_err_from_libc(fchmodat(fd, buf, (mode_t)(st->raw_attrs & 07777), 0));
 
 #elif defined(SP_WASM)
   (void)fd; (void)path; (void)len; (void)st;
-  return -1;
+  return SP_ERR_SYS_UNSUPPORTED;
 
 #else
   #error "sp_sys_chmod"
 #endif
 }
 
-s32 sp_sys_chmod_s(sp_sys_fd_t fd, sp_str_t path, const sp_sys_file_meta_t* st) {
+sp_err_t sp_sys_chmod_s(sp_sys_fd_t fd, sp_str_t path, const sp_sys_file_meta_t* st) {
   return sp_sys_chmod(fd, path.data, path.len, st);
 }
 
 ///////////////////////////////
 // SP_SYS_CANONICALIZE_PATH //
 ///////////////////////////////
-s64 sp_sys_canonicalize_path(const c8* path, u32 len, c8* buf, u64 size) {
+s64 sp_sys_canonicalize_path_p(const c8* path, u32 len, c8* buf, u64 size) {
 #if defined(SP_WIN32)
   if (!buf) return -1;
 
-  void* h = sp_sys_nt_open(
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  if (!SP_NT_SUCCESS(sp_sys_nt_open(
     sp_sys_get_root(0),
     sp_str(path, len),
     FILE_READ_ATTRIBUTES | SYNCHRONIZE,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
     SP_NT_FILE_OPEN,
     SP_NT_FILE_SYNCHRONOUS_IO_NONALERT | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT,
-    0
-  );
-  if (!h) return -1;
+    0,
+    &handle
+  ))) {
+    return -1;
+  }
 
   u16 wbuf[SP_PATH_MAX];
-  DWORD wlen = GetFinalPathNameByHandleW((HANDLE)h, (LPWSTR)wbuf, SP_PATH_MAX, 0);
-  SP_NT(NtClose)(h);
+  DWORD wlen = GetFinalPathNameByHandleW((HANDLE)handle, (LPWSTR)wbuf, SP_PATH_MAX, 0);
+  sp_sys_nt_close(handle);
   if (wlen == 0 || wlen >= SP_PATH_MAX) return -1;
 
+  // This code is wrong. Stripping \\?\ is wrong for input paths that
+  // are legitimately UNC. The right path is to do what dunce does in Rust,
+  // which is classify the path first, but I'm leaving this for now because
+  // it only affects callers who explicitly pass in a UNC path. If you're
+  // using regular C:/ paths, it's OK
   u32 skip = 0;
   if (wlen >= 4 && wbuf[0] == '\\' && wbuf[1] == '\\' && wbuf[2] == '?' && wbuf[3] == '\\') skip = 4;
   SP_ALIGNED c8 u8buf[SP_PATH_MAX * 3 + 1];
   sp_mem_fixed_t fixed = sp_mem_fixed(u8buf, sizeof(u8buf));
-  sp_str_t utf8 = sp_wtf16_to_wtf8(sp_mem_fixed_as_allocator(&fixed), (sp_wide_str_t) { .data = wbuf + skip, .len = wlen - skip });
+  sp_str_t utf8;
+  if (sp_wtf16_to_wtf8(sp_mem_fixed_as_allocator(&fixed), (sp_wide_str_t) { .data = wbuf + skip, .len = wlen - skip }, &utf8) != SP_OK) return -1;
   if (utf8.len >= size) return -1;
   sp_mem_copy(buf, utf8.data, utf8.len);
   buf[utf8.len] = 0;
   return (s64)utf8.len;
 
 #elif defined(SP_LINUX)
-  c8 pbuf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, pbuf, SP_PATH_MAX);
-  s64 fd = sp_syscall(SP_SYSCALL_NUM_OPENAT, SP_AT_FDCWD, pbuf, SP_O_RDONLY | SP_O_CLOEXEC, 0);
-  if (fd < 0) return fd;
+  c8 pbuf [SP_PATH_MAX];
+  sp_try_as(sp_sys_posix_path(path, len, pbuf), -1);
+  s64 fd = sp_syscall(SP_SYSCALL_NUM_OPENAT, SP_AT_FDCWD, pbuf, SP_SYS_LINUX_O_PATH | SP_SYS_LINUX_O_CLOEXEC, 0);
+  if (fd < 0) return -1;
 
   c8 proc [64] = sp_zero;
   sp_fmt_buf(proc, 64, "/proc/self/fd/{}", sp_fmt_int(fd));
 
-  s64 n = sp_syscall(SP_SYSCALL_NUM_READLINKAT, SP_AT_FDCWD, proc, buf, size);
+  c8 rbuf [SP_PATH_MAX];
+  s64 n = sp_syscall(SP_SYSCALL_NUM_READLINKAT, SP_AT_FDCWD, proc, rbuf, SP_PATH_MAX);
   sp_sys_close(fd);
+  if (n < 0 || n == SP_PATH_MAX || (u64)n >= size) return -1;
+  sp_mem_copy(buf, rbuf, (u64)n);
+  buf[n] = 0;
   return n;
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
   if (!path || !buf || size == 0) return -1;
-  c8 pbuf [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, len, pbuf, SP_PATH_MAX);
-  c8 resolved[4096];
+  c8 pbuf [SP_PATH_MAX];
+  sp_try_as(sp_sys_posix_path(path, len, pbuf), -1);
+  c8 resolved [SP_PATH_MAX];
   if (!realpath(pbuf, resolved)) return -1;
-  u64 n = 0;
-  while (resolved[n] && n < size - 1) { buf[n] = resolved[n]; n++; }
-  buf[n] = '\0';
+  u64 n = sp_cstr_len(resolved);
+  if (n >= size) return -1;
+  sp_mem_copy(buf, resolved, n);
+  buf[n] = 0;
   return (s64)n;
 
 #elif defined(SP_WASM)
@@ -6628,7 +10545,7 @@ s64 sp_sys_canonicalize_path_s(sp_str_t path, c8* buf, u64 size) {
 /////////////////////////
 // SP_SYS_GET_EXE_PATH //
 /////////////////////////
-s64 sp_sys_get_exe_path(c8* buf, u64 size) {
+s64 sp_sys_get_exe_path_p(c8* buf, u64 size) {
 #if defined(SP_WIN32)
   if (!buf) return -1;
 
@@ -6636,14 +10553,20 @@ s64 sp_sys_get_exe_path(c8* buf, u64 size) {
   u32 wlen = image->Length / (u32)sizeof(u16);
   SP_ALIGNED c8 u8buf[SP_PATH_MAX * 3 + 1];
   sp_mem_fixed_t fixed = sp_mem_fixed(u8buf, sizeof(u8buf));
-  sp_str_t utf8 = sp_wtf16_to_wtf8(sp_mem_fixed_as_allocator(&fixed), (sp_wide_str_t) { .data = image->Buffer, .len = wlen });
+  sp_str_t utf8;
+  if (sp_wtf16_to_wtf8(sp_mem_fixed_as_allocator(&fixed), (sp_wide_str_t) { .data = image->Buffer, .len = wlen }, &utf8) != SP_OK) return -1;
   if (utf8.len >= size) return -1;
   sp_mem_copy(buf, utf8.data, utf8.len);
   buf[utf8.len] = 0;
   return (s64)utf8.len;
 
 #elif defined(SP_LINUX)
-  return sp_syscall(SP_SYSCALL_NUM_READLINKAT, SP_AT_FDCWD, "/proc/self/exe", buf, size);
+  c8 rbuf [SP_PATH_MAX];
+  s64 n = sp_syscall(SP_SYSCALL_NUM_READLINKAT, SP_AT_FDCWD, "/proc/self/exe", rbuf, SP_PATH_MAX);
+  if (n < 0 || n == SP_PATH_MAX || (u64)n >= size) return -1;
+  sp_mem_copy(buf, rbuf, (u64)n);
+  buf[n] = 0;
+  return n;
 
 #elif defined(SP_MACOS)
   if (!buf || size == 0) return -1;
@@ -6669,7 +10592,7 @@ s64 sp_sys_get_exe_path(c8* buf, u64 size) {
 /////////////////////////
 // SP_SYS_GET_CWD_PATH //
 /////////////////////////
-s64 sp_sys_get_cwd_path(c8* buf, u64 size) {
+s64 sp_sys_get_cwd_path_p(c8* buf, u64 size) {
 #if defined(SP_WIN32)
   if (!buf) return -1;
 
@@ -6677,7 +10600,17 @@ s64 sp_sys_get_cwd_path(c8* buf, u64 size) {
   u32 wlen = cwd->Length / (u32)sizeof(u16);
   SP_ALIGNED c8 u8buf[SP_PATH_MAX * 3 + 1];
   sp_mem_fixed_t fixed = sp_mem_fixed(u8buf, sizeof(u8buf));
-  sp_str_t utf8 = sp_wtf16_to_wtf8(sp_mem_fixed_as_allocator(&fixed), (sp_wide_str_t) { .data = cwd->Buffer, .len = wlen });
+  sp_str_t utf8;
+  if (sp_wtf16_to_wtf8(sp_mem_fixed_as_allocator(&fixed), (sp_wide_str_t) { .data = cwd->Buffer, .len = wlen }, &utf8) != SP_OK) return -1;
+
+  // The PEB DosPath always carries a trailing separator; strip it the way
+  // GetCurrentDirectoryW does, except at a drive root, where "C:" would mean
+  // something else (drive-relative).
+  c8 last = utf8.len ? utf8.data[utf8.len - 1] : 0;
+  if (utf8.len > 1 && (last == '\\' || last == '/') && !(utf8.len == 3 && utf8.data[1] == ':')) {
+    utf8.len--;
+  }
+
   if (utf8.len >= size) return -1;
   sp_mem_copy(buf, utf8.data, utf8.len);
   buf[utf8.len] = 0;
@@ -7017,7 +10950,7 @@ void* sp_da_resize(void* arr, u32 stride, u64 cap) {
   cap = sp_max(cap, 4);
   sp_da_header_t* header = sp_da_head(arr);
   u64 old_size = header->capacity * stride + sizeof(sp_da_header_t);
-  header = sp_cast(sp_da_header_t*, sp_realloc(header->allocator, header, old_size, cap * stride + sizeof(sp_da_header_t)));
+  header = sp_cast(sp_da_header_t*, sp_realloc_uninitialized(header->allocator, header, old_size, cap * stride + sizeof(sp_da_header_t)));
 
   if (!header) return SP_NULLPTR;
 
@@ -7046,7 +10979,7 @@ void sp_da_push_ex(void** arr, void* val, u32 stride) {
 
 void* sp_da_init_ex(sp_mem_t mem, u32 stride) {
   u32 cap = 4;
-  sp_da_header_t* head = (sp_da_header_t*)sp_alloc(mem, cap * stride + sizeof(sp_da_header_t));
+  sp_da_header_t* head = (sp_da_header_t*)sp_alloc_uninitialized(mem, cap * stride + sizeof(sp_da_header_t));
   *head = (sp_da_header_t) {
     .size = 0,
     .capacity = cap,
@@ -7121,18 +11054,6 @@ void* sp_rb_grow_ex(void* arr, u32 stride, u32 capacity) {
 //  █████       ░░░███████░   █████   █████ █████     █████ █████   █████    █████
 // ░░░░░          ░░░░░░░    ░░░░░   ░░░░░ ░░░░░     ░░░░░ ░░░░░   ░░░░░    ░░░░░
 // @format
-void sp_fmt_directive_register(const c8* name, sp_fmt_directive_t directive) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
-  sp_str_t id = sp_str_from_cstr(tls->mem.heap, name);
-  sp_str_ht_insert(tls->format.directives, id, directive);
-}
-
-sp_fmt_directive_t* sp_fmt_directive_lookup(sp_str_t name) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
-  u64 index = 0;
-  return sp_str_ht_get_ex(tls->format.directives, name, index);
-}
-
 static u8 sp_fmt_peek(sp_fmt_parser_t* p, u32 offset) {
   u32 idx = p->i + offset;
   if (idx >= p->str.len) return 0;
@@ -7182,6 +11103,10 @@ static bool sp_fmt_is_align(u8 c) {
   return c == '<' || c == '^' || c == '>';
 }
 
+static bool sp_fmt_is_renderer(u8 c) {
+  return c == 'B' || c == 'b' || c == 'x' || c == 'X' || c == 'o' || c == 'c';
+}
+
 static sp_str_t sp_fmt_sub(sp_fmt_parser_t* p) {
   return (sp_str_t) {
     .data = p->str.data + p->i,
@@ -7202,17 +11127,6 @@ static sp_str_t sp_fmt_directive_name(sp_fmt_parser_t* p) {
     word.len++;
   }
   return word;
-}
-
-static sp_str_t sp_fmt_directive_arg(sp_fmt_parser_t* p) {
-  sp_str_t arg = sp_fmt_sub(p);
-  while (true) {
-    c8 c = sp_fmt_peek(p, 0);
-    if (!c || sp_fmt_is_whitespace(c) || c == '}' || c == '.' || c == '$') break;
-    sp_fmt_advance(p);
-    arg.len++;
-  }
-  return arg;
 }
 
 static bool sp_fmt_at_directive_boundary(sp_fmt_parser_t* p) {
@@ -7239,11 +11153,11 @@ static sp_err_t sp_fmt_parse_number(sp_fmt_parser_t* p, u32* out) {
 }
 
 // Parses the spec body that follows the `:` introducer:
-// [fill_align] [width] [.precision]
+// [fill_align] [width] [.precision] [renderer]
 static sp_err_t sp_fmt_parse_spec_body(sp_fmt_parser_t* p, sp_fmt_spec_t* spec) {
   sp_fmt_peek_t peek = sp_fmt_peek2(p);
   if (sp_fmt_is_align(peek.second)) {
-    if (peek.first == '$') spec->dynamic.fill = 1;
+    if (peek.first == '$') spec->dynamic |= SP_FMT_DYNAMIC_FILL;
     else                   spec->fill = peek.first;
     spec->align = sp_fmt_align_from_char(peek.second);
     sp_fmt_advance(p);
@@ -7257,17 +11171,18 @@ static sp_err_t sp_fmt_parse_spec_body(sp_fmt_parser_t* p, sp_fmt_spec_t* spec) 
   c8 c = sp_fmt_peek(p, 0);
   if (c == '$') {
     sp_fmt_advance(p);
-    spec->dynamic.width = 1;
+    spec->dynamic |= SP_FMT_DYNAMIC_WIDTH;
   }
   else if (sp_fmt_is_digit(c)) {
     sp_fmt_parse_number(p, &spec->width);
+    if (spec->width > SP_FMT_WIDTH_MAX) spec->width = SP_FMT_WIDTH_MAX;
   }
 
   if (sp_fmt_peek(p, 0) == '.') {
     sp_fmt_advance(p);
     if (sp_fmt_peek(p, 0) == '$') {
       sp_fmt_advance(p);
-      spec->dynamic.precision = 1;
+      spec->dynamic |= SP_FMT_DYNAMIC_PRECISION;
     }
     else {
       u32 prec = 0;
@@ -7275,17 +11190,25 @@ static sp_err_t sp_fmt_parse_spec_body(sp_fmt_parser_t* p, sp_fmt_spec_t* spec) 
       sp_opt_set(spec->precision, (u8)prec);
     }
   }
+
+  if (sp_fmt_is_renderer(sp_fmt_peek(p, 0))) spec->renderer = sp_fmt_advance(p);
   return SP_OK;
 }
 
-// Parses a single directive that follows the `.` introducer:
-// name [whitespace (dynamic | literal_arg)]
-// On success, leaves the cursor on a directive boundary (whitespace, `}`, or
-// EOF). The trailing whitespace — if any — is left for the top-level loop to
-// consume: it separates this directive from the next one.
+// Parses a single directive that follows the `.` introducer: just a name. On
+// success, leaves the cursor on a directive boundary (whitespace, `}`, or EOF).
+// The trailing whitespace — if any — is left for the top-level loop to consume:
+// it separates this directive from the next one.
 static sp_err_t sp_fmt_parse_directive(sp_fmt_parser_t* p, sp_fmt_spec_t* spec) {
   if (spec->directive.num >= SP_FMT_MAX_DIRECTIVES) {
     return SP_ERR_FMT_TOO_MANY_DIRECTIVES;
+  }
+
+  if (sp_fmt_match(p, '$')) {
+    u32 index = spec->directive.num++;
+    spec->dynamic |= sp_fmt_dynamic_directive(index);
+    if (!sp_fmt_at_directive_boundary(p)) return SP_ERR_FMT_BAD_PLACEHOLDER;
+    return SP_OK;
   }
 
   sp_str_t name = sp_fmt_directive_name(p);
@@ -7293,24 +11216,6 @@ static sp_err_t sp_fmt_parse_directive(sp_fmt_parser_t* p, sp_fmt_spec_t* spec) 
 
   u32 index = spec->directive.num++;
   spec->directive.names[index] = name;
-
-  // An arg must be preceded by whitespace. Peek past any whitespace to
-  // decide whether one follows — if not, leave the cursor on the whitespace
-  // (or wherever it is) for the boundary check and the top-level loop.
-  if (sp_fmt_is_whitespace(sp_fmt_peek(p, 0))) {
-    u32 off = 1;
-    while (sp_fmt_is_whitespace(sp_fmt_peek(p, off))) off++;
-    c8 c = sp_fmt_peek(p, off);
-    if (c == '$') {
-      sp_fmt_eat_whitespace(p);
-      sp_fmt_advance(p);
-      spec->dynamic.directive |= (u8)(1u << index);
-    }
-    else if (c && c != '}' && c != '.') {
-      sp_fmt_eat_whitespace(p);
-      spec->directive.args[index] = sp_fmt_directive_arg(p);
-    }
-  }
 
   if (!sp_fmt_at_directive_boundary(p)) return SP_ERR_FMT_BAD_PLACEHOLDER;
   return SP_OK;
@@ -7339,258 +11244,125 @@ sp_err_t sp_fmt_parse_specifier(sp_fmt_parser_t* p, sp_fmt_spec_t* spec) {
 
 static sp_err_t sp_fmt_pull_specifier_arg(sp_fmt_argv_t a, s64* out) {
   if (a.id != sp_fmt_id_u64 && a.id != sp_fmt_id_s64) {
-    return SP_ERR_FMT_DIRECTIVE_ARG_WRONG_KIND;
+    return SP_ERR;
   }
   *out = (a.id == sp_fmt_id_s64) ? a.value.i : (s64)a.value.u;
   return SP_OK;
 }
 
-static void sp_fmt_directive_bold(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  (void)arg; sp_unused(params);
-  sp_io_write_cstr(io, "\033[1m", SP_NULLPTR);
+sp_err_t sp_fmt_style_from_name(sp_str_t name, sp_fmt_style_t* out) {
+  if (sp_str_equal_cstr(name, "black")) { *out = sp_fmt_style_black; return SP_OK; }
+  if (sp_str_equal_cstr(name, "red")) { *out = sp_fmt_style_red; return SP_OK; }
+  if (sp_str_equal_cstr(name, "green")) { *out = sp_fmt_style_green; return SP_OK; }
+  if (sp_str_equal_cstr(name, "yellow")) { *out = sp_fmt_style_yellow; return SP_OK; }
+  if (sp_str_equal_cstr(name, "blue")) { *out = sp_fmt_style_blue; return SP_OK; }
+  if (sp_str_equal_cstr(name, "magenta")) { *out = sp_fmt_style_magenta; return SP_OK; }
+  if (sp_str_equal_cstr(name, "cyan")) { *out = sp_fmt_style_cyan; return SP_OK; }
+  if (sp_str_equal_cstr(name, "white")) { *out = sp_fmt_style_white; return SP_OK; }
+  if (sp_str_equal_cstr(name, "gray")) { *out = sp_fmt_style_gray; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_black")) { *out = sp_fmt_style_gray; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_red")) { *out = sp_fmt_style_br_red; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_green")) { *out = sp_fmt_style_br_green; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_yellow")) { *out = sp_fmt_style_br_yellow; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_blue")) { *out = sp_fmt_style_br_blue; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_magenta")) { *out = sp_fmt_style_br_magenta; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_cyan")) { *out = sp_fmt_style_br_cyan; return SP_OK; }
+  if (sp_str_equal_cstr(name, "br_white")) { *out = sp_fmt_style_br_white; return SP_OK; }
+  if (sp_str_equal_cstr(name, "bold")) { *out = sp_fmt_style_bold; return SP_OK; }
+  if (sp_str_equal_cstr(name, "italic")) { *out = sp_fmt_style_italic; return SP_OK; }
+  if (sp_str_equal_cstr(name, "hyperlink")) { *out = sp_fmt_style_hyperlink; return SP_OK; }
+  if (sp_str_equal_cstr(name, "quote")) { *out = sp_fmt_style_quote; return SP_OK; }
+  return SP_ERR_FMT_UNKNOWN_DIRECTIVE;
 }
 
-static void sp_fmt_directive_italic(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  (void)arg; sp_unused(params);
-  sp_io_write_cstr(io, "\033[3m", SP_NULLPTR);
-}
-
-static void sp_fmt_directive_red(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_RED, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_green(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_GREEN, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_yellow(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_YELLOW, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_blue(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BLUE, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_cyan(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_CYAN, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_magenta(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_MAGENTA, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_white(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_WHITE, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_black(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BLACK, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_red(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_RED, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_green(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_GREEN, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_yellow(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_YELLOW, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_blue(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_BLUE, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_cyan(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_CYAN, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_magenta(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_MAGENTA, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_bright_white(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_WHITE, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_gray(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(arg); sp_unused(params);
-  sp_io_write_cstr(io, SP_ANSI_FG_BRIGHT_BLACK, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_ansi_reset(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* param) {
-  sp_unused(arg); sp_unused(param);
-  sp_io_write_cstr(io, SP_ANSI_RESET, SP_NULLPTR);
-}
-
-static void sp_fmt_directive_hyperlink(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(params);
-  sp_io_write_cstr(io, "\033]8;;", SP_NULLPTR);
-  if (arg->id == sp_fmt_id_str) sp_io_write_str(io, arg->value.s, SP_NULLPTR);
-  sp_io_write_cstr(io, "\033\\", SP_NULLPTR);
-}
-
-static void sp_fmt_directive_quote(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  (void)arg; sp_unused(params);
-  sp_io_write_c8(io, '"');
-}
-
-static void sp_fmt_directive_quote_after(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  (void)arg; sp_unused(params);
-  sp_io_write_c8(io, '"');
-}
-
-static void sp_fmt_directive_bytes_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  u64 bytes = arg->value.u; sp_unused(params);
-  static const c8* units[] = { "B", "KB", "MB", "GB", "TB", "PB" };
-  u32 unit_idx = 0;
-  u64 whole = bytes;
-  u64 rem = 0;
-  while (whole >= 1024 && unit_idx < 5) {
-    rem = whole & 1023;
-    whole >>= 10;
-    unit_idx++;
+sp_fmt_style_t sp_fmt_style_from_attr(sp_fmt_style_attr_t attr) {
+  switch (attr) {
+    case SP_FMT_STYLE_ATTR_NONE:      return sp_fmt_style_none;
+    case SP_FMT_STYLE_ATTR_BOLD:      return sp_fmt_style_bold;
+    case SP_FMT_STYLE_ATTR_ITALIC:    return sp_fmt_style_italic;
+    case SP_FMT_STYLE_ATTR_HYPERLINK: return sp_fmt_style_hyperlink;
   }
-  sp_fmt_write_u64(io, whole);
-  if (unit_idx > 0) {
-    u32 tenths = (u32)((rem * 10) >> 10);
-    if (tenths > 0) {
-      sp_io_write_c8(io, '.');
-      sp_io_write_c8(io, (c8)('0' + tenths));
-    }
+  SP_UNREACHABLE_RETURN(sp_fmt_style_none);
+}
+
+const c8* sp_fmt_style_to_ansi(sp_fmt_style_t style) {
+  switch (style) {
+    case sp_fmt_style_black:      return SP_ANSI_FG_BLACK;
+    case sp_fmt_style_red:        return SP_ANSI_FG_RED;
+    case sp_fmt_style_green:      return SP_ANSI_FG_GREEN;
+    case sp_fmt_style_yellow:     return SP_ANSI_FG_YELLOW;
+    case sp_fmt_style_blue:       return SP_ANSI_FG_BLUE;
+    case sp_fmt_style_magenta:    return SP_ANSI_FG_MAGENTA;
+    case sp_fmt_style_cyan:       return SP_ANSI_FG_CYAN;
+    case sp_fmt_style_white:      return SP_ANSI_FG_WHITE;
+    case sp_fmt_style_gray:       return SP_ANSI_FG_BRIGHT_BLACK;
+    case sp_fmt_style_br_red:     return SP_ANSI_FG_BRIGHT_RED;
+    case sp_fmt_style_br_green:   return SP_ANSI_FG_BRIGHT_GREEN;
+    case sp_fmt_style_br_yellow:  return SP_ANSI_FG_BRIGHT_YELLOW;
+    case sp_fmt_style_br_blue:    return SP_ANSI_FG_BRIGHT_BLUE;
+    case sp_fmt_style_br_magenta: return SP_ANSI_FG_BRIGHT_MAGENTA;
+    case sp_fmt_style_br_cyan:    return SP_ANSI_FG_BRIGHT_CYAN;
+    case sp_fmt_style_br_white:   return SP_ANSI_FG_BRIGHT_WHITE;
+    case sp_fmt_style_bold:       return "\033[1m";
+    case sp_fmt_style_italic:     return "\033[3m";
+    case sp_fmt_style_none:
+    case sp_fmt_style_unset:
+    case sp_fmt_style_hyperlink:
+    case sp_fmt_style_quote:      return SP_NULLPTR;
   }
-  sp_io_write_c8(io, ' ');
-  sp_io_write_cstr(io, units[unit_idx], SP_NULLPTR);
+  return SP_NULLPTR;
 }
 
-static void sp_fmt_directive_iso_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(params);
-  sp_tm_epoch_to_iso8601_w(io, (sp_tm_epoch_t) { .s = arg->value.u });
-}
-
-static void sp_fmt_directive_hex_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(params);
-  u64 value = (arg->id == sp_fmt_id_s64) ? (u64)arg->value.i : arg->value.u;
-  c8 buf[16];
-  c8* end = buf + sizeof(buf);
-  c8* start = sp_fmt_uint_to_buf_hex_ex(value, end, "0123456789ABCDEF");
-  sp_io_write_cstr(io, "0x", SP_NULLPTR);
-  sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
-}
-
-static void sp_fmt_directive_ordinal_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  s64 value = (arg->id == sp_fmt_id_s64) ? arg->value.i : (s64)arg->value.u; sp_unused(params);
-  sp_fmt_write_s64(io, value);
-  s64 abs = value < 0 ? -value : value;
-  u32 mod100 = (u32)(abs % 100);
-  u32 mod10 = (u32)(abs % 10);
-  const c8* suffix = "th";
-  if (mod100 < 11 || mod100 > 13) {
-    if (mod10 == 1) suffix = "st";
-    else if (mod10 == 2) suffix = "nd";
-    else if (mod10 == 3) suffix = "rd";
+u8 sp_fmt_style_to_ansi_u8(sp_fmt_style_t style) {
+  switch (style) {
+    case sp_fmt_style_black:      return SP_ANSI_FG_BLACK_U8;
+    case sp_fmt_style_red:        return SP_ANSI_FG_RED_U8;
+    case sp_fmt_style_green:      return SP_ANSI_FG_GREEN_U8;
+    case sp_fmt_style_yellow:     return SP_ANSI_FG_YELLOW_U8;
+    case sp_fmt_style_blue:       return SP_ANSI_FG_BLUE_U8;
+    case sp_fmt_style_magenta:    return SP_ANSI_FG_MAGENTA_U8;
+    case sp_fmt_style_cyan:       return SP_ANSI_FG_CYAN_U8;
+    case sp_fmt_style_white:      return SP_ANSI_FG_WHITE_U8;
+    case sp_fmt_style_gray:       return SP_ANSI_FG_BRIGHT_BLACK_U8;
+    case sp_fmt_style_br_red:     return SP_ANSI_FG_BRIGHT_RED_U8;
+    case sp_fmt_style_br_green:   return SP_ANSI_FG_BRIGHT_GREEN_U8;
+    case sp_fmt_style_br_yellow:  return SP_ANSI_FG_BRIGHT_YELLOW_U8;
+    case sp_fmt_style_br_blue:    return SP_ANSI_FG_BRIGHT_BLUE_U8;
+    case sp_fmt_style_br_magenta: return SP_ANSI_FG_BRIGHT_MAGENTA_U8;
+    case sp_fmt_style_br_cyan:    return SP_ANSI_FG_BRIGHT_CYAN_U8;
+    case sp_fmt_style_br_white:   return SP_ANSI_FG_BRIGHT_WHITE_U8;
+    case sp_fmt_style_bold:
+    case sp_fmt_style_italic:
+    case sp_fmt_style_none:
+    case sp_fmt_style_unset:
+    case sp_fmt_style_hyperlink:
+    case sp_fmt_style_quote:      return 0;
   }
-  sp_io_write_cstr(io, suffix, SP_NULLPTR);
+  return 0;
 }
 
-static void sp_fmt_directive_duration_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* params) {
-  sp_unused(params);
-  u64 ns = arg->value.u;
-  if (ns < 1000) {
-    sp_fmt_write_u64(io, ns);
-    sp_io_write_cstr(io, " ns", SP_NULLPTR);
-    return;
+static void sp_fmt_style_open(sp_io_writer_t* io, sp_fmt_style_t style, sp_fmt_arg_t* arg) {
+  const c8* ansi = sp_fmt_style_to_ansi(style);
+  if (ansi) {
+    sp_io_write_cstr(io, ansi, SP_NULLPTR);
   }
-  static const c8* units[] = { "us", "ms", "s" };
-  u32 unit_idx = 0;
-  u64 whole = ns / 1000;
-  u64 rem = ns % 1000;
-  while (whole >= 1000 && unit_idx < 2) {
-    rem = whole % 1000;
-    whole /= 1000;
-    unit_idx++;
+  else if (style == sp_fmt_style_hyperlink) {
+    sp_io_write_cstr(io, "\033]8;;", SP_NULLPTR);
+    if (arg->id == sp_fmt_id_str) sp_io_write_str(io, arg->value.s, SP_NULLPTR);
+    sp_io_write_cstr(io, "\033\\", SP_NULLPTR);
   }
-  sp_fmt_write_u64(io, whole);
-  if (rem >= 100) {
-    sp_io_write_c8(io, '.');
-    sp_io_write_c8(io, (c8)('0' + rem / 100));
+  else if (style == sp_fmt_style_quote) {
+    sp_io_write_c8(io, '"');
   }
-  sp_io_write_c8(io, ' ');
-  sp_io_write_cstr(io, units[unit_idx], SP_NULLPTR);
 }
 
-sp_str_t sp_fmt_color_to_ansi_fg(sp_str_t id) {
-  if (sp_str_equal_cstr(id, "black")) return sp_str_lit(SP_ANSI_FG_BLACK);
-  if (sp_str_equal_cstr(id, "red")) return sp_str_lit(SP_ANSI_FG_RED);
-  if (sp_str_equal_cstr(id, "green")) return sp_str_lit(SP_ANSI_FG_GREEN);
-  if (sp_str_equal_cstr(id, "yellow")) return sp_str_lit(SP_ANSI_FG_YELLOW);
-  if (sp_str_equal_cstr(id, "blue")) return sp_str_lit(SP_ANSI_FG_BLUE);
-  if (sp_str_equal_cstr(id, "magenta")) return sp_str_lit(SP_ANSI_FG_MAGENTA);
-  if (sp_str_equal_cstr(id, "cyan")) return sp_str_lit(SP_ANSI_FG_CYAN);
-  if (sp_str_equal_cstr(id, "white")) return sp_str_lit(SP_ANSI_FG_WHITE);
-  if (sp_str_equal_cstr(id, "brightblack")) return sp_str_lit(SP_ANSI_FG_BRIGHT_BLACK);
-  if (sp_str_equal_cstr(id, "brightred")) return sp_str_lit(SP_ANSI_FG_BRIGHT_RED);
-  if (sp_str_equal_cstr(id, "brightgreen")) return sp_str_lit(SP_ANSI_FG_BRIGHT_GREEN);
-  if (sp_str_equal_cstr(id, "brightyellow")) return sp_str_lit(SP_ANSI_FG_BRIGHT_YELLOW);
-  if (sp_str_equal_cstr(id, "brightblue")) return sp_str_lit(SP_ANSI_FG_BRIGHT_BLUE);
-  if (sp_str_equal_cstr(id, "brightmagenta")) return sp_str_lit(SP_ANSI_FG_BRIGHT_MAGENTA);
-  if (sp_str_equal_cstr(id, "brightcyan")) return sp_str_lit(SP_ANSI_FG_BRIGHT_CYAN);
-  if (sp_str_equal_cstr(id, "brightwhite")) return sp_str_lit(SP_ANSI_FG_BRIGHT_WHITE);
-  return sp_str_lit(SP_ANSI_RESET);
-}
-
-static void sp_fmt_directive_fg(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* param) {
-  sp_unused(arg);
-  sp_str_t ansi = sp_fmt_color_to_ansi_fg(param->value.s);
-  sp_io_write_str(io, ansi, SP_NULLPTR);
-}
-
-void sp_fmt_register_builtins() {
-  sp_fmt_register_decorator_p("fg", sp_fmt_directive_fg, sp_fmt_directive_ansi_reset, sp_fmt_id_str);
-  sp_fmt_register_decorator("red", sp_fmt_directive_red, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("green", sp_fmt_directive_green, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("yellow", sp_fmt_directive_yellow, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("blue", sp_fmt_directive_blue, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("cyan", sp_fmt_directive_cyan, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("magenta", sp_fmt_directive_magenta, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("white", sp_fmt_directive_white, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("black", sp_fmt_directive_black, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_red", sp_fmt_directive_bright_red, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_green", sp_fmt_directive_bright_green, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_yellow", sp_fmt_directive_bright_yellow, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_blue", sp_fmt_directive_bright_blue, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_cyan", sp_fmt_directive_bright_cyan, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_magenta", sp_fmt_directive_bright_magenta, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_white", sp_fmt_directive_bright_white, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("br_black", sp_fmt_directive_gray, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("gray", sp_fmt_directive_gray, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("bold", sp_fmt_directive_bold, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("italic", sp_fmt_directive_italic, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("hyperlink", sp_fmt_directive_hyperlink, sp_fmt_directive_ansi_reset);
-  sp_fmt_register_decorator("quote", sp_fmt_directive_quote, sp_fmt_directive_quote_after);
-  sp_fmt_register_renderer("bytes", sp_fmt_directive_bytes_render, sp_fmt_id_none);
-  sp_fmt_register_renderer("hex", sp_fmt_directive_hex_render, sp_fmt_id_none);
-  sp_fmt_register_renderer("iso", sp_fmt_directive_iso_render, sp_fmt_id_none);
-  sp_fmt_register_renderer("ordinal", sp_fmt_directive_ordinal_render, sp_fmt_id_none);
-  sp_fmt_register_renderer("duration", sp_fmt_directive_duration_render, sp_fmt_id_none);
-
+static void sp_fmt_style_close(sp_io_writer_t* io, sp_fmt_style_t style) {
+  if (style == sp_fmt_style_quote) {
+    sp_io_write_c8(io, '"');
+  }
+  else if (style != sp_fmt_style_none && style != sp_fmt_style_unset) {
+    sp_io_write_cstr(io, SP_ANSI_RESET, SP_NULLPTR);
+  }
 }
 
 bool sp_parse_u64_ex(sp_str_t str, u64* out) {
@@ -7951,17 +11723,6 @@ sp_hash_t sp_parse_hash(sp_str_t str) {
 }
 
 
-//  █████          ███████      █████████
-// ░░███         ███░░░░░███   ███░░░░░███
-//  ░███        ███     ░░███ ███     ░░░
-//  ░███       ░███      ░███░███
-//  ░███       ░███      ░███░███    █████
-//  ░███      █░░███     ███ ░░███  ░░███
-//  ███████████ ░░░███████░   ░░█████████
-// ░░░░░░░░░░░    ░░░░░░░      ░░░░░░░░░
-// @log
-
-
 //  ██████╗ ██████╗ ███╗   ██╗████████╗███████╗██╗  ██╗████████╗
 // ██╔════╝██╔═══██╗████╗  ██║╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝
 // ██║     ██║   ██║██╔██╗ ██║   ██║   █████╗   ╚███╔╝    ██║
@@ -7990,7 +11751,6 @@ sp_mem_arena_t* sp_tls_rt_get_scratch_arena_for(sp_tls_rt_t* tls, sp_mem_t mem) 
 
 void sp_rt_init() {
   sp_tls_new(&sp_rt.tls.key, sp_tls_rt_deinit);
-  sp_mutex_init(&sp_rt.mutex, SP_MUTEX_PLAIN);
 #if defined(SP_WIN32)
   sp_nt_load();
 #endif
@@ -7999,9 +11759,6 @@ void sp_rt_init() {
 void sp_tls_rt_deinit(void* ptr) {
   if (!ptr) return;
   sp_tls_rt_t* tls = (sp_tls_rt_t*)ptr;
-  if (tls->std.out) sp_mem_allocator_free(tls->mem.heap, tls->std.out, sizeof(sp_io_stream_writer_t));
-  if (tls->std.err) sp_mem_allocator_free(tls->mem.heap, tls->std.err, sizeof(sp_io_stream_writer_t));
-  sp_str_ht_free(tls->format.directives);
   sp_carr_for(tls->scratch, it) {
     sp_mem_arena_destroy(tls->scratch[it]);
   }
@@ -8026,30 +11783,9 @@ sp_tls_rt_t* sp_tls_rt_get() {
     sp_carr_for(tls->scratch, it) {
       tls->scratch[it] = sp_mem_arena_new(tls->mem.page);
     }
-    // std.out/std.err are wired lazily (see sp_tls_std_out/_err). Wiring them here
-    // would take the address of sp_io_stream_writer_write in code that sp_main always
-    // reaches, which on WASM forces a fd_write import even for programs that never write.
-    sp_str_ht_init(tls->mem.heap, tls->format.directives);
-    sp_fmt_register_builtins();
     sp_sys_tls_init(tls);
   }
   return tls;
-}
-
-sp_io_writer_t* sp_tls_std_out(sp_tls_rt_t* tls) {
-  if (!tls->std.out) {
-    tls->std.out = sp_alloc_type(tls->mem.heap, sp_io_stream_writer_t);
-    sp_io_stream_writer_from_fd(tls->std.out, sp_sys_stdout, SP_IO_CLOSE_MODE_NONE);
-  }
-  return &tls->std.out->base;
-}
-
-sp_io_writer_t* sp_tls_std_err(sp_tls_rt_t* tls) {
-  if (!tls->std.err) {
-    tls->std.err = sp_alloc_type(tls->mem.heap, sp_io_stream_writer_t);
-    sp_io_stream_writer_from_fd(tls->std.err, sp_sys_stderr, SP_IO_CLOSE_MODE_NONE);
-  }
-  return &tls->std.err->base;
 }
 
 #if defined(SP_FREESTANDING)
@@ -8170,8 +11906,16 @@ void* sp_mem_allocator_alloc(sp_mem_t allocator, u64 size) {
   return allocator.on_alloc(allocator.user_data, SP_ALLOCATOR_MODE_ALLOC, size, NULL, 0);
 }
 
+void* sp_mem_allocator_alloc_uninitialized(sp_mem_t allocator, u64 size) {
+  return allocator.on_alloc(allocator.user_data, SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED, size, NULL, 0);
+}
+
 void* sp_mem_allocator_realloc(sp_mem_t allocator, void* memory, u64 old_size, u64 size) {
   return allocator.on_alloc(allocator.user_data, SP_ALLOCATOR_MODE_RESIZE, size, memory, old_size);
+}
+
+void* sp_mem_allocator_realloc_uninitialized(sp_mem_t allocator, void* memory, u64 old_size, u64 size) {
+  return allocator.on_alloc(allocator.user_data, SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED, size, memory, old_size);
 }
 
 void sp_mem_allocator_free(sp_mem_t allocator, void* buffer, u64 size) {
@@ -8297,7 +12041,7 @@ sp_mem_arena_block_t* sp_mem_arena_get_block(sp_mem_arena_t* arena, u64 size) {
   return new_block;
 }
 
-void* sp_mem_arena_alloc_size(sp_mem_arena_t* arena, u64 size) {
+void* sp_mem_arena_alloc_size_uninitialized(sp_mem_arena_t* arena, u64 size) {
   if (size > ((u64)-1) - SP_MEM_ARENA_MAX_BLOCK_SIZE) return SP_NULLPTR;
 
   sp_mem_arena_block_t* block = sp_mem_arena_get_block(arena, size);
@@ -8305,7 +12049,12 @@ void* sp_mem_arena_alloc_size(sp_mem_arena_t* arena, u64 size) {
 
   void* ptr = sp_mem_arena_block_buffer(block) + block->bytes_used;
   block->bytes_used += size;
-  sp_mem_zero(ptr, size);
+  return ptr;
+}
+
+void* sp_mem_arena_alloc_size(sp_mem_arena_t* arena, u64 size) {
+  void* ptr = sp_mem_arena_alloc_size_uninitialized(arena, size);
+  if (ptr) sp_mem_zero(ptr, size);
   return ptr;
 }
 
@@ -8322,8 +12071,13 @@ void* sp_mem_arena_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size,
     case SP_ALLOCATOR_MODE_ALLOC: {
       return sp_mem_arena_alloc_size(arena, size);
     }
-    case SP_ALLOCATOR_MODE_RESIZE: {
-      if (!old_memory) return sp_mem_arena_alloc_size(arena, size);
+    case SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED: {
+      return sp_mem_arena_alloc_size_uninitialized(arena, size);
+    }
+    case SP_ALLOCATOR_MODE_RESIZE:
+    case SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED: {
+      bool uninitialized = mode == SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED;
+      if (!old_memory) return uninitialized ? sp_mem_arena_alloc_size_uninitialized(arena, size) : sp_mem_arena_alloc_size(arena, size);
 
       sp_mem_arena_block_t* block = arena->current;
       if (sp_mem_arena_is_top(arena, old_memory, old_size)) {
@@ -8333,7 +12087,7 @@ void* sp_mem_arena_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size,
         }
         u64 grow = size - old_size;
         if (grow <= block->capacity - block->bytes_used) {
-          sp_mem_zero(sp_mem_arena_block_buffer(block) + block->bytes_used, grow);
+          if (!uninitialized) sp_mem_zero(sp_mem_arena_block_buffer(block) + block->bytes_used, grow);
           block->bytes_used += grow;
           return old_memory;
         }
@@ -8341,9 +12095,10 @@ void* sp_mem_arena_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size,
 
       if (size <= old_size) return old_memory;
 
-      void* fresh = sp_mem_arena_alloc_size(arena, size);
+      void* fresh = sp_mem_arena_alloc_size_uninitialized(arena, size);
       if (!fresh) return SP_NULLPTR;
       sp_mem_move(fresh, old_memory, old_size);
+      if (!uninitialized) sp_mem_zero((u8*)fresh + old_size, size - old_size);
       return fresh;
     }
     case SP_ALLOCATOR_MODE_FREE: {
@@ -8361,8 +12116,16 @@ void* sp_mem_arena_alloc(sp_mem_arena_t* arena, u64 size) {
   return sp_mem_arena_on_alloc(arena, SP_ALLOCATOR_MODE_ALLOC, size, SP_NULLPTR, 0);
 }
 
+void* sp_mem_arena_alloc_uninitialized(sp_mem_arena_t* arena, u64 size) {
+  return sp_mem_arena_on_alloc(arena, SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED, size, SP_NULLPTR, 0);
+}
+
 void* sp_mem_arena_realloc(sp_mem_arena_t* arena, void* ptr, u64 old_size, u64 size) {
   return sp_mem_arena_on_alloc(arena, SP_ALLOCATOR_MODE_RESIZE, size, ptr, old_size);
+}
+
+void* sp_mem_arena_realloc_uninitialized(sp_mem_arena_t* arena, void* ptr, u64 old_size, u64 size) {
+  return sp_mem_arena_on_alloc(arena, SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED, size, ptr, old_size);
 }
 
 void sp_mem_arena_free(sp_mem_arena_t* arena, void* ptr, u64 size) {
@@ -8397,26 +12160,38 @@ u64 sp_mem_fixed_bytes_used(sp_mem_fixed_t* fixed) {
   return fixed->bytes_used;
 }
 
+void* sp_mem_error_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size, void* old_memory, u64 old_size) {
+  sp_assert(false);
+  return SP_NULLPTR;
+}
+
+sp_mem_t sp_mem_error() {
+  return (sp_mem_t) { .on_alloc = sp_mem_error_on_alloc };
+}
+
 void* sp_mem_fixed_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size, void* old_memory, u64 old_size) {
   sp_mem_fixed_t* fixed = (sp_mem_fixed_t*)user_data;
 
   switch (mode) {
-    case SP_ALLOCATOR_MODE_ALLOC: {
+    case SP_ALLOCATOR_MODE_ALLOC:
+    case SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED: {
       u8* ptr = (u8*)sp_align_up(fixed->buffer + fixed->bytes_used, fixed->alignment);
       u64 offset = (u64)(ptr - fixed->buffer);
       if (offset > fixed->capacity || size > fixed->capacity - offset) return SP_NULLPTR;
       fixed->bytes_used = offset + size;
-      sp_mem_zero(ptr, size);
+      if (mode == SP_ALLOCATOR_MODE_ALLOC) sp_mem_zero(ptr, size);
       return ptr;
     }
-    case SP_ALLOCATOR_MODE_RESIZE: {
-      if (!old_memory) return sp_mem_fixed_on_alloc(user_data, SP_ALLOCATOR_MODE_ALLOC, size, SP_NULLPTR, 0);
+    case SP_ALLOCATOR_MODE_RESIZE:
+    case SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED: {
+      bool uninitialized = mode == SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED;
+      if (!old_memory) return sp_mem_fixed_on_alloc(user_data, uninitialized ? SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED : SP_ALLOCATOR_MODE_ALLOC, size, SP_NULLPTR, 0);
 
       bool is_top = (u8*)old_memory + old_size == fixed->buffer + fixed->bytes_used;
       if (is_top) {
         u64 offset = (u64)((u8*)old_memory - fixed->buffer);
         if (size <= fixed->capacity - offset) {
-          if (size > old_size) sp_mem_zero((u8*)old_memory + old_size, size - old_size);
+          if (size > old_size && !uninitialized) sp_mem_zero((u8*)old_memory + old_size, size - old_size);
           fixed->bytes_used = offset + size;
           return old_memory;
         }
@@ -8424,9 +12199,10 @@ void* sp_mem_fixed_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size,
 
       if (size <= old_size) return old_memory;
 
-      void* fresh = sp_mem_fixed_on_alloc(user_data, SP_ALLOCATOR_MODE_ALLOC, size, SP_NULLPTR, 0);
+      void* fresh = sp_mem_fixed_on_alloc(user_data, SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED, size, SP_NULLPTR, 0);
       if (!fresh) return SP_NULLPTR;
       sp_mem_move(fresh, old_memory, old_size);
+      if (!uninitialized) sp_mem_zero((u8*)fresh + old_size, size - old_size);
       return fresh;
     }
     case SP_ALLOCATOR_MODE_FREE: {
@@ -8874,11 +12650,12 @@ bool sp_wtf8_validate(sp_str_t str) {
   return true;
 }
 
-sp_wide_str_t sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8) {
-  sp_wide_str_t result = sp_zero_s(sp_wide_str_t);
-  if (sp_str_empty(wtf8)) return result;
+sp_err_t sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8, sp_wide_str_t* out) {
+  *out = sp_zero_s(sp_wide_str_t);
+  if (sp_str_empty(wtf8)) return SP_OK;
 
   u16* buf = sp_alloc_n(mem, u16, wtf8.len + 1);
+  if (!buf) return SP_ERR_SYS_NO_MEMORY;
   const c8* ptr = wtf8.data;
   u32 i = 0;
   u32 n = 0;
@@ -8907,15 +12684,21 @@ sp_wide_str_t sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8) {
   }
 
   buf[n] = 0;
-  return (sp_wide_str_t) { .data = buf, .len = n };
+  out->data = buf;
+  out->len = n;
+  return SP_OK;
 
 error:
   sp_free(mem, buf, (wtf8.len + 1) * sizeof(u16));
-  return result;
+  return SP_ERR_SYS_INVALID;
 }
 
-sp_str_t sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16) {
+sp_err_t sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16, sp_str_t* out) {
+  *out = sp_zero_s(sp_str_t);
+  if (!wtf16.len) return SP_OK;
+
   c8* buf = sp_alloc_n(mem, c8, wtf16.len * 3 + 1);
+  if (!buf) return SP_ERR_SYS_NO_MEMORY;
   u32 offset = 0;
   sp_for(i, wtf16.len) {
     u16 u = wtf16.data[i];
@@ -8931,7 +12714,9 @@ sp_str_t sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16) {
   }
   buf[offset] = 0;
 
-  return (sp_str_t) { .data = buf, .len = offset };
+  out->data = buf;
+  out->len = offset;
+  return SP_OK;
 }
 
 sp_str_t sp_str(const c8* str, u32 len) {
@@ -9375,66 +13160,17 @@ sp_str_t sp_str_truncate(sp_mem_t mem, sp_str_t str, u32 max_len, sp_str_t trail
   return sp_str_concat(mem, sp_str_prefix(str, max_len - trailer.len), trailer);
 }
 
-sp_da(sp_str_t) sp_str_map(sp_mem_t mem, sp_str_t* strs, u32 num_strs, void* user_data, sp_str_map_fn_t fn) {
-  sp_da(sp_str_t) results = sp_da_new(mem, sp_str_t);
-
-  sp_for(it, num_strs) {
-    sp_str_map_context_t context = {
-      .mem = mem,
-      .str = strs[it],
-      .user_data = user_data
-    };
-    sp_str_t result = fn(&context);
-    sp_da_push(results, result);
-  }
-
-  return results;
-}
-
-sp_str_t sp_str_map_kernel_prepend(sp_str_map_context_t* context) {
-  sp_str_t prefix = *(sp_str_t*)context->user_data;
-  return sp_str_concat(context->mem, prefix, context->str);
-}
-
-sp_str_t sp_str_map_kernel_append(sp_str_map_context_t* context) {
-  sp_str_t suffix = *(sp_str_t*)context->user_data;
-  return sp_str_concat(context->mem, context->str, suffix);
-}
-
-sp_str_t sp_str_map_kernel_prefix(sp_str_map_context_t* context) {
-  u32 len;
-  sp_mem_copy(&len, context->user_data, sizeof(len));
-  return sp_str_sub(context->str, 0, len);
-}
-
-sp_str_t sp_str_map_kernel_pad(sp_str_map_context_t* context) {
-  u32 len;
-  sp_mem_copy(&len, context->user_data, sizeof(len));
-  return sp_str_pad(context->mem, context->str, len);
-}
-
-sp_str_t sp_str_map_kernel_trim(sp_str_map_context_t* context) {
-  return sp_str_trim(context->str);
-}
-
-sp_str_t sp_str_map_kernel_to_upper(sp_str_map_context_t* context) {
-  return sp_str_to_upper(context->mem, context->str);
-}
-
-sp_str_t sp_str_map_kernel_to_lower(sp_str_map_context_t* context) {
-  return sp_str_to_lower(context->mem, context->str);
-}
-
-sp_str_t sp_str_map_kernel_pascal_case(sp_str_map_context_t* context) {
-  return sp_str_to_pascal_case(context->mem, context->str);
-}
-
 sp_da(sp_str_t) sp_str_pad_to_longest(sp_mem_t mem, sp_str_t* strs, u32 n) {
   u32 max_len = 0;
   sp_for(i, n) {
     if (strs[i].len > max_len) max_len = strs[i].len;
   }
-  return sp_str_map(mem, strs, n, &max_len, sp_str_map_kernel_pad);
+
+  sp_da(sp_str_t) results = sp_da_new(mem, sp_str_t);
+  sp_for(i, n) {
+    sp_da_push(results, sp_str_pad(mem, strs[i], max_len));
+  }
+  return results;
 }
 
 
@@ -9451,155 +13187,32 @@ sp_da(sp_str_t) sp_str_pad_to_longest(sp_mem_t mem, sp_str_t* strs, u32 n) {
 //////////////
 // ITERATOR //
 //////////////
-SP_PRIVATE bool sp_sys_diriter_is_dot(const c8* name) {
-  return name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0));
-}
+#ifdef SP_WIN32
+#define SP_SYS_DIR_WIN32_SCRATCH (255 * 3 + 1 + SP_MEM_ALIGNMENT - 1)
+sp_static_assert(SP_SYS_DIR_MIN_BUF >= SP_SYS_DIR_WIN32_SCRATCH + sizeof(sp_nt_file_directory_information_t) + 255 * sizeof(u16), sp_sys_dir_min_buf);
 
-s32 sp_sys_fs_it_open_s(sp_sys_fd_t fd, sp_sys_fs_it_t* it, sp_str_t path, sp_mem_slice_t buf) {
-  return sp_sys_fs_it_open(fd, it, path.data, path.len, buf.data, buf.len);
-}
-
-#if defined(SP_WIN32)
-SP_PRIVATE sp_fs_kind_t sp_sys_diriter_win32_attrs(sp_win32_dword_t attrs) {
+SP_PRIVATE sp_fs_kind_t sp_sys_dir_win32_attrs(sp_win32_dword_t attrs) {
   if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) return SP_FS_KIND_SYMLINK;
   if (attrs & FILE_ATTRIBUTE_DIRECTORY) return SP_FS_KIND_DIR;
   return SP_FS_KIND_FILE;
 }
 
-SP_PRIVATE bool sp_sys_diriter_win32_is_dot(const u16* name) {
-  if (name[0] == '.' && name[1] == 0) return true;
-  if (name[0] == '.' && name[1] == '.' && name[2] == 0) return true;
-  return false;
-}
-
-SP_PRIVATE u32 sp_sys_diriter_win32_name_len(const u16* name) {
-  u32 n = 0;
-  while (name[n]) n++;
-  return n;
-}
-
-s32 sp_sys_fs_it_open(sp_sys_fd_t fd, sp_sys_fs_it_t* it, const c8* path, u32 path_len, void* buf, u64 cap) {
-  (void)fd;
-  *it = sp_zero_s(sp_sys_fs_it_t);
-  if (cap < sizeof(sp_win32_find_data_t) + (MAX_PATH * 3 + 1)) return -1;
-
-  SP_ALIGNED u8 pattern_storage [SP_PATH_MAX];
-  sp_mem_fixed_t pattern_fixed = sp_mem_fixed(pattern_storage, sizeof(pattern_storage));
-  sp_mem_t pattern_mem = sp_mem_fixed_as_allocator(&pattern_fixed);
-  sp_str_t pattern = sp_fs_join_path(pattern_mem, sp_str(path, path_len), sp_str_lit("*"));
-
-  sp_sys_nt_path_t nt = sp_zero;
-  if (!SP_NT_SUCCESS(sp_sys_nt_path(pattern, &nt))) {
-    return -1;
-  }
-
-  u32 w_off = 0;
-  if (nt.name.Length >= 8 && nt.name.Buffer[0] == '\\' && nt.name.Buffer[1] == '?' && nt.name.Buffer[2] == '?' && nt.name.Buffer[3] == '\\') {
-    w_off = 4;
-  }
-  u32 prefixed_len = 4 + (nt.name.Length / sizeof(u16)) - w_off;
-  u16 wpat [SP_PATH_MAX + 8];
-  wpat[0] = '\\'; wpat[1] = '\\'; wpat[2] = '?'; wpat[3] = '\\';
-  sp_mem_copy(wpat + 4, nt.name.Buffer + w_off, nt.name.Length - w_off * sizeof(u16));
-  wpat[prefixed_len] = 0;
-  sp_sys_nt_path_free(&nt);
-
-  sp_win32_find_data_t* find = (sp_win32_find_data_t*)buf;
-  HANDLE h = FindFirstFileW((LPCWSTR)wpat, find);
-  if (h == INVALID_HANDLE_VALUE) return -1;
-
-  it->handle = (s64)(intptr_t)h;
-  it->buf.data = (u8*)buf;
-  it->buf.capacity = cap;
-  it->buf.len = sizeof(sp_win32_find_data_t);
-  it->cursor = 0;
-  return 0;
-}
-
-void sp_sys_fs_it_close(sp_sys_fs_it_t* it) {
-  FindClose((HANDLE)(intptr_t)it->handle);
-}
-
-s32 sp_sys_fs_it_next(sp_sys_fs_it_t* it, sp_sys_fs_entry_t* out) {
-  sp_win32_find_data_t* fd = (sp_win32_find_data_t*)it->buf.data;
-  while (true) {
-    if (it->buf.len == 0) {
-      if (!FindNextFileW((HANDLE)(intptr_t)it->handle, fd)) {
-        return -1;
-      }
-    }
-    it->buf.len = 0;
-
-    u16* name = (u16*)fd->cFileName;
-    if (sp_sys_diriter_win32_is_dot(name)) {
-      continue;
-    }
-
-    u8* scratch_data = it->buf.data + sizeof(sp_win32_find_data_t);
-    u64 scratch_cap = it->buf.capacity - sizeof(sp_win32_find_data_t);
-    sp_mem_fixed_t allocator = sp_mem_fixed(scratch_data, scratch_cap);
-    sp_mem_t mem = sp_mem_fixed_as_allocator(&allocator);
-
-    u32 wlen = sp_sys_diriter_win32_name_len(name);
-    sp_str_t utf8 = sp_wtf16_to_wtf8(mem, sp_wide_str(name, wlen));
-    out->kind = sp_sys_diriter_win32_attrs(fd->dwFileAttributes);
-    out->name = utf8.data;
-    out->len = utf8.len;
-    return SP_OK;
-  }
-}
-
 #elif defined(SP_LINUX)
-SP_PRIVATE sp_fs_kind_t sp_sys_diriter_dtype_to_kind(u8 d_type) {
+sp_static_assert(SP_SYS_DIR_MIN_BUF >= sizeof(sp_sys_dirent64_t) + 255 + 1, sp_sys_dir_min_buf);
+
+SP_PRIVATE sp_fs_kind_t sp_sys_dir_dtype_to_kind(u8 d_type) {
   switch (d_type) {
     case SP_DT_REG: { return SP_FS_KIND_FILE; }
     case SP_DT_DIR: { return SP_FS_KIND_DIR; }
     case SP_DT_LNK: { return SP_FS_KIND_SYMLINK; }
   }
   return SP_FS_KIND_NONE;
-}
-
-s32 sp_sys_fs_it_open(sp_sys_fd_t root, sp_sys_fs_it_t* it, const c8* path, u32 path_len, void* buf, u64 cap) {
-  *it = sp_zero_s(sp_sys_fs_it_t);
-  sp_sys_fd_t fd = sp_sys_open(root, path, path_len, SP_O_RDONLY | SP_O_DIRECTORY, 0);
-  if (fd < 0) return -1;
-  it->handle = (s64)fd;
-  it->buf.data = (u8*)buf;
-  it->buf.capacity = cap;
-  it->buf.len = 0;
-  it->cursor = 0;
-  return 0;
-}
-
-void sp_sys_fs_it_close(sp_sys_fs_it_t* it) {
-  sp_sys_close((sp_sys_fd_t)it->handle);
-}
-
-s32 sp_sys_fs_it_next(sp_sys_fs_it_t* it, sp_sys_fs_entry_t* out) {
-  while (true) {
-    // Pull another chunk from the kernel and advance the cursor
-    if (it->cursor >= it->buf.len) {
-      s64 n = sp_lx_getdents64((sp_sys_fd_t)it->handle, it->buf.data, it->buf.capacity);
-      if (n <= 0) return -1;
-      it->cursor = 0;
-      it->buf.len = (u64)n;
-    }
-
-    sp_sys_dirent64_t* d = sp_ptr_cast(sp_sys_dirent64_t*, it->buf.data + it->cursor);
-    it->cursor += d->d_reclen;
-
-    // If it's an absolute path, that's the one
-    if (!sp_sys_diriter_is_dot(d->d_name)) {
-      out->kind = sp_sys_diriter_dtype_to_kind(d->d_type);
-      out->name = d->d_name;
-      out->len = sp_cstr_len(d->d_name);
-      return SP_OK;
-    }
-  }
 }
 
 #elif defined(SP_MACOS) || defined(SP_COSMO)
-SP_PRIVATE sp_fs_kind_t sp_sys_diriter_dtype_to_kind(u8 d_type) {
+sp_static_assert(SP_SYS_DIR_MIN_BUF >= sizeof(struct dirent), sp_sys_dir_min_buf);
+
+SP_PRIVATE sp_fs_kind_t sp_sys_dir_dtype_to_kind(u8 d_type) {
   switch (d_type) {
     case SP_DT_REG: { return SP_FS_KIND_FILE; }
     case SP_DT_DIR: { return SP_FS_KIND_DIR; }
@@ -9607,56 +13220,120 @@ SP_PRIVATE sp_fs_kind_t sp_sys_diriter_dtype_to_kind(u8 d_type) {
   }
   return SP_FS_KIND_NONE;
 }
-
-s32 sp_sys_fs_it_open(sp_sys_fd_t fd, sp_sys_fs_it_t* it, const c8* path, u32 path_len, void* buf, u64 cap) {
-  (void)fd;
-  *it = sp_zero_s(sp_sys_fs_it_t);
-  c8 cstr [SP_PATH_MAX] = sp_zero;
-  sp_cstr_copy_to_n(path, path_len, cstr, SP_PATH_MAX);
-  DIR* dir = opendir(cstr);
-  if (!dir) return -1;
-  it->handle = (s64)(intptr_t)dir;
-  it->buf.data = (u8*)buf;
-  it->buf.capacity = cap;
-  it->buf.len = 0;
-  it->cursor = 0;
-  return 0;
-}
-
-void sp_sys_fs_it_close(sp_sys_fs_it_t* it) {
-  closedir((DIR*)(intptr_t)it->handle);
-}
-
-s32 sp_sys_fs_it_next(sp_sys_fs_it_t* it, sp_sys_fs_entry_t* out) {
-  while (true) {
-    struct dirent* d = readdir((DIR*)(intptr_t)it->handle);
-    if (!d) return -1;
-    if (sp_sys_diriter_is_dot(d->d_name)) continue;
-    out->name = d->d_name;
-    out->len = sp_cstr_len(d->d_name);
-    out->kind = sp_sys_diriter_dtype_to_kind(d->d_type);
-    return 0;
-  }
-}
-
-#elif defined(SP_WASM)
-s32 sp_sys_fs_it_open(sp_sys_fd_t fd, sp_sys_fs_it_t* it, const c8* path, u32 path_len, void* buf, u64 cap) {
-  sp_unreachable_return(-1);
-}
-
-void sp_sys_fs_it_close(sp_sys_fs_it_t* it) {
-  sp_unreachable();
-}
-
-s32 sp_sys_fs_it_next(sp_sys_fs_it_t* it, sp_sys_fs_entry_t* out) {
-  sp_unreachable_return(-1);
-}
-
-#else
-#error "sp_sys_fs_it_open"
-#error "sp_sys_fs_it_close"
-#error "sp_sys_fs_it_next"
 #endif
+
+sp_err_t sp_sys_dir_from_fd_p(sp_sys_fd_t fd, sp_sys_dir_t* out) {
+  *out = sp_zero_s(sp_sys_dir_t);
+
+#if defined(SP_WIN32) || defined(SP_LINUX)
+  out->handle = (s64)fd;
+  return SP_OK;
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  DIR* dir = fdopendir((int)fd);
+  if (!dir) return sp_sys_err_from_errno(errno);
+
+  out->handle = (s64)(intptr_t)dir;
+  return SP_OK;
+#elif defined(SP_WASM)
+  (void)fd;
+  return SP_ERR_SYS_UNSUPPORTED;
+#else
+  #error "sp_sys_dir_from_fd"
+#endif
+}
+
+sp_err_t sp_sys_dir_read_p(sp_sys_dir_t* dir, sp_mem_buffer_t* buf) {
+  buf->len = 0;
+#if defined(SP_WIN32)
+  sp_nt_io_status_block_t iosb = sp_zero;
+  sp_nt_status_t status = SP_NT(NtQueryDirectoryFile)(
+    (void*)(intptr_t)dir->handle,
+    SP_NULLPTR, SP_NULLPTR, SP_NULLPTR,
+    &iosb,
+    buf->data, (u32)(buf->capacity - SP_SYS_DIR_WIN32_SCRATCH),
+    SP_NT_FILE_DIRECTORY_INFORMATION,
+    0, SP_NULLPTR, 0);
+  if (status == SP_NT_STATUS_NO_MORE_FILES) return SP_OK;
+  if (status == SP_NT_STATUS_NO_SUCH_FILE) return SP_OK;
+  if (!SP_NT_SUCCESS(status)) return sp_sys_err_from_nt(status);
+  buf->len = (u64)iosb.Information;
+  return SP_OK;
+#elif defined(SP_LINUX)
+  s64 n = sp_lx_getdents64((sp_sys_fd_t)dir->handle, buf->data, buf->capacity);
+  if (n == -SP_ENOENT) return SP_OK;
+  if (n < 0) return sp_sys_err_from_errno(-n);
+  buf->len = (u64)n;
+  return SP_OK;
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  errno = 0;
+  struct dirent* d = readdir((DIR*)(intptr_t)dir->handle);
+  if (!d) return errno ? sp_sys_err_from_errno(errno) : SP_OK;
+  sp_mem_copy(buf->data, d, d->d_reclen);
+  buf->len = d->d_reclen;
+  return SP_OK;
+#elif defined(SP_WASM)
+  (void)dir;
+  return SP_ERR_SYS_UNSUPPORTED;
+#else
+  #error "sp_sys_dir_read"
+#endif
+}
+
+sp_err_t sp_sys_dir_parse_p(sp_sys_dir_t* dir, sp_mem_buffer_t* buf, u64* cursor, sp_sys_dir_entry_t* out) {
+  *out = sp_zero_s(sp_sys_dir_entry_t);
+#if defined(SP_WIN32)
+  (void)dir;
+  sp_nt_file_directory_information_t* d = sp_ptr_cast(sp_nt_file_directory_information_t*, buf->data + *cursor);
+  *cursor = d->NextEntryOffset ? *cursor + d->NextEntryOffset : buf->len;
+
+  sp_mem_fixed_t allocator = sp_mem_fixed(buf->data + buf->capacity - SP_SYS_DIR_WIN32_SCRATCH, SP_SYS_DIR_WIN32_SCRATCH);
+  sp_mem_t mem = sp_mem_fixed_as_allocator(&allocator);
+
+  sp_str_t utf8;
+  sp_try_as(sp_wtf16_to_wtf8(mem, sp_wide_str(d->FileName, d->FileNameLength / sizeof(u16)), &utf8), SP_ERR_SYS_NAME_TOO_LONG);
+  out->name = utf8.data;
+  out->len = utf8.len;
+  out->kind = sp_sys_dir_win32_attrs(d->FileAttributes);
+  return SP_OK;
+#elif defined(SP_LINUX)
+  (void)dir;
+  sp_sys_dirent64_t* d = sp_ptr_cast(sp_sys_dirent64_t*, buf->data + *cursor);
+  *cursor += d->d_reclen;
+
+  out->name = d->d_name;
+  out->len = sp_cstr_len(d->d_name);
+  out->kind = sp_sys_dir_dtype_to_kind(d->d_type);
+  return SP_OK;
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  (void)dir;
+  struct dirent* d = sp_ptr_cast(struct dirent*, buf->data + *cursor);
+  *cursor += d->d_reclen;
+
+  out->name = d->d_name;
+  out->len = sp_cstr_len(d->d_name);
+  out->kind = sp_sys_dir_dtype_to_kind(d->d_type);
+  return SP_OK;
+#elif defined(SP_WASM)
+  (void)dir; (void)buf; (void)cursor;
+  return SP_ERR_SYS_UNSUPPORTED;
+#else
+  #error "sp_sys_dir_parse"
+#endif
+}
+
+sp_err_t sp_sys_dir_close_p(sp_sys_dir_t* dir) {
+#if defined(SP_WIN32) || defined(SP_LINUX)
+  return sp_sys_close((sp_sys_fd_t)dir->handle);
+#elif defined(SP_MACOS) || defined(SP_COSMO)
+  if (closedir((DIR*)(intptr_t)dir->handle)) return sp_sys_err_from_errno(errno);
+  return SP_OK;
+#elif defined(SP_WASM)
+  (void)dir;
+  return SP_ERR_SYS_UNSUPPORTED;
+#else
+  #error "sp_sys_dir_close"
+#endif
+}
 
 
 //     ███████     █████████
@@ -9675,9 +13352,9 @@ void sp_assert_f(sp_str_t file, sp_str_t line, sp_str_t func, sp_str_t expr, boo
   if (cond) return;
 
 #if SP_ASSERT_ENABLED(SP_ASSERT_LOG)
-  sp_io_stream_writer_t io = sp_io_get_std_err();
+  sp_io_writer_t* io = sp_io_get_std_err();
   sp_fmt_io(
-    &io.base,
+    io,
     "{.red} {}:{.gray}:{.yellow}{.yellow} {}",
     sp_fmt_cstr("assert"),
     sp_fmt_str(file),
@@ -9686,7 +13363,7 @@ void sp_assert_f(sp_str_t file, sp_str_t line, sp_str_t func, sp_str_t expr, boo
     sp_fmt_cstr("()"),
     sp_fmt_str(expr)
   );
-  sp_io_write_cstr(&io.base, "\n", SP_NULLPTR);
+  sp_io_write_cstr(io, "\n", SP_NULLPTR);
 #endif
 
 #if SP_ASSERT_ENABLED(SP_ASSERT_TRAP)
@@ -9704,9 +13381,6 @@ void sp_os_sleep_ns(u64 ns) {
   };
   sp_sys_timespec_t rem = sp_zero;
   sp_sys_nanosleep(&req, &rem);
-  // while (sp_sys_nanosleep(&req, &rem) == -1 && errno == SP_EINTR) {
-  //   req = rem;
-  // }
 }
 
 void sp_os_sleep_ms(f64 ms) {
@@ -9749,156 +13423,6 @@ void sp_sleep_ns(u64 target) {
 void sp_sleep_ms(f64 ms) {
   sp_sleep_ns((u64)sp_tm_ms_to_ns_f(ms));
 }
-
-
-//////////////////
-// SP_OS_PRINT //
-/////////////////
-#if defined(SP_WIN32)
-SP_PRIVATE void sp_os_win32_write(DWORD handle_id, sp_str_t message) {
-  HANDLE handle = GetStdHandle(handle_id);
-  DWORD written;
-  DWORD mode;
-  if (GetConsoleMode(handle, &mode)) {
-    WriteConsoleA(handle, message.data, message.len, &written, NULL);
-  } else {
-    WriteFile(handle, message.data, message.len, &written, NULL);
-  }
-}
-
-void sp_os_print(sp_str_t message) {
-  sp_os_win32_write(STD_OUTPUT_HANDLE, message);
-}
-
-void sp_os_print_err(sp_str_t message) {
-  sp_os_win32_write(STD_ERROR_HANDLE, message);
-}
-
-#else
-void sp_os_print(sp_str_t message) {
-  sp_sys_write(sp_sys_stdout, message.data, message.len);
-}
-
-void sp_os_print_err(sp_str_t message) {
-  sp_sys_write(sp_sys_stderr, message.data, message.len);
-}
-#endif
-
-
-/////////
-// TTY //
-/////////
-#if defined(SP_WIN32)
-bool sp_os_is_tty(sp_sys_fd_t fd) {
-  HANDLE handle = (HANDLE)fd;
-  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return false;
-  DWORD mode;
-  return GetConsoleMode(handle, &mode) != 0;
-}
-
-void sp_os_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows) {
-  if (cols) *cols = 0;
-  if (rows) *rows = 0;
-  HANDLE handle = (HANDLE)fd;
-  if (handle == INVALID_HANDLE_VALUE || handle == SP_NULLPTR) return;
-  CONSOLE_SCREEN_BUFFER_INFO csbi;
-  if (!GetConsoleScreenBufferInfo(handle, &csbi)) return;
-  if (cols) *cols = (u32)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
-  if (rows) *rows = (u32)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
-}
-
-s32 sp_os_tty_enter_raw(sp_sys_fd_t fd, sp_tty_mode_t* saved) {
-  HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
-  HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
-  (void)fd;
-  if (!GetConsoleMode(hin, &saved->input_mode)) return -1;
-  if (!GetConsoleMode(hout, &saved->output_mode)) return -1;
-  SetConsoleOutputCP(CP_UTF8);
-  DWORD raw_in = ENABLE_VIRTUAL_TERMINAL_INPUT;
-  DWORD raw_out = saved->output_mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-  if (!SetConsoleMode(hin, raw_in)) return -1;
-  if (!SetConsoleMode(hout, raw_out)) return -1;
-  return 0;
-}
-
-s32 sp_os_tty_restore(sp_sys_fd_t fd, const sp_tty_mode_t* saved) {
-  (void)fd;
-  if (!SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), saved->input_mode)) return -1;
-  if (!SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), saved->output_mode)) return -1;
-  return 0;
-}
-
-#elif defined(SP_MACOS) || defined(SP_COSMO) || defined(SP_LINUX)
-#if defined(SP_LINUX)
-  typedef sp_sys_termios_t sp_termios_t;
-  typedef sp_sys_winsize_t sp_winsize_t;
-  #define sp_tcgetattr(f, t) sp_sys_tcgetattr(f, t)
-  #define sp_tcsetattr(f, o, t) sp_sys_tcsetattr(f, o, t)
-  #define sp_ioctl(f, r, a) sp_sys_ioctl(f, r, a)
-
-  s32 sp_sys_ioctl(s32 fd, u64 request, void* argp) {
-    return (s32)sp_syscall(SP_SYSCALL_NUM_IOCTL, fd, request, argp);
-  }
-
-  s32 sp_sys_tcgetattr(s32 fd, sp_sys_termios_t* termios) {
-    s32 result = sp_sys_ioctl(fd, SP_TCGETS, termios);
-    return result < 0 ? -1 : result;
-  }
-
-  s32 sp_sys_tcsetattr(s32 fd, s32 opt, const sp_sys_termios_t* termios) {
-    s32 result = sp_sys_ioctl(fd, SP_TCSETS + (u64)opt, (void*)termios);
-    return result < 0 ? -1 : result;
-  }
-#else
-  typedef struct termios sp_termios_t;
-  typedef struct winsize sp_winsize_t;
-  #define sp_tcgetattr(f, t) tcgetattr(f, t)
-  #define sp_tcsetattr(f, o, t) tcsetattr(f, o, t)
-  #define sp_ioctl(f, r, a) ioctl(f, r, a)
-#endif
-
-bool sp_os_is_tty(sp_sys_fd_t fd) {
-  sp_termios_t t = sp_zero;
-  return sp_tcgetattr(fd, &t) == 0;
-}
-
-void sp_os_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows) {
-  if (cols) *cols = 0;
-  if (rows) *rows = 0;
-  sp_winsize_t ws = sp_zero;
-  if (sp_ioctl(fd, SP_TIOCGWINSZ, &ws) < 0) return;
-  if (cols) *cols = (u32)ws.ws_col;
-  if (rows) *rows = (u32)ws.ws_row;
-}
-
-s32 sp_os_tty_enter_raw(sp_sys_fd_t fd, sp_tty_mode_t* saved) {
-  if (sp_tcgetattr(fd, saved) == -1) return -1;
-  sp_termios_t raw = *saved;
-  raw.c_iflag &= (u32)~(SP_BRKINT | SP_ICRNL | SP_INPCK | SP_ISTRIP | SP_IXON);
-  raw.c_oflag &= (u32)~(SP_OPOST);
-  raw.c_cflag |= (u32)SP_CS8;
-  raw.c_lflag &= (u32)~(SP_ECHO | SP_ICANON | SP_IEXTEN | SP_ISIG);
-  raw.c_cc[SP_VMIN] = 1;
-  raw.c_cc[SP_VTIME] = 0;
-  return sp_tcsetattr(fd, SP_TCSAFLUSH, &raw);
-}
-
-s32 sp_os_tty_restore(sp_sys_fd_t fd, const sp_tty_mode_t* saved) {
-  return sp_tcsetattr(fd, SP_TCSAFLUSH, saved);
-}
-
-#elif defined(SP_WASM)
-bool sp_os_is_tty(sp_sys_fd_t fd)                                  { return false; }
-void sp_os_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows)          { *cols = 0; *rows = 0; }
-s32  sp_os_tty_enter_raw(sp_sys_fd_t fd, sp_tty_mode_t* saved)     { return 0; }
-s32  sp_os_tty_restore(sp_sys_fd_t fd, const sp_tty_mode_t* saved) { return 0; }
-
-#else
-#error "sp_os_is_tty"
-#error "sp_os_tty_size"
-#error "sp_os_tty_enter_raw"
-#error "sp_os_tty_restore"
-#endif
 
 
 ///////////
@@ -10156,7 +13680,7 @@ void sp_os_qsort(void *arr, u64 len, u64 stride, sp_qsort_fn_t cmp) {
   sp_mem_arena_marker_t s = sp_mem_begin_scratch();
   u8* tmp = sp_alloc_n(s.mem, u8, stride);
 
-  for (gap = len / 3; gap > 0; gap /= 3 + 1) {
+  for (gap = len / 2; gap > 0; gap /= 2) {
     for (i = gap; i < len; i++) {
       sp_sys_memcpy(tmp, a + i * stride, stride);
       for (j = i; j >= gap && cmp(a + (j - gap) * stride, tmp) > 0; j -= gap) {
@@ -10480,7 +14004,7 @@ void sp_os_env_it_next(sp_os_env_it_t* it) {
 #error "sp_os_env_it_next"
 #endif
 
-void sp_sys_env(const c8** env, u32* len) {
+void sp_sys_env_p(const c8** env, u32* len) {
 #if defined(SP_WIN32)
 #elif defined(SP_FREESTANDING)
 #elif defined(SP_MACOS) || defined(SP_COSMO) || defined(SP_LINUX) || defined(SP_WASM)
@@ -10809,24 +14333,18 @@ bool sp_spin_try_lock(sp_spin_lock_t* lock) {
     return __sync_lock_test_and_set(lock, 1) == 0;
   #elif defined(SP_MSVC)
     return _InterlockedExchange((LONG*)lock, 1) == 0;
+  #elif defined(SP_TCC) && defined(SP_AMD64)
+    s32 one = 1;
+    __asm__ __volatile__("xchgl %0, %1" : "+r"(one), "+m"(*lock) : : "memory");
+    return one == 0;
   #else
-    sp_mutex_lock(&sp_rt.mutex);
-
-    if (*lock == 0) {
-      *lock = 1;
-      sp_mutex_unlock(&sp_rt.mutex);
-      return true;
-    }
-    else {
-      sp_mutex_unlock(&sp_rt.mutex);
-      return false;
-    }
+    #error "sp_spin_try_lock"
   #endif
 }
 
 void sp_spin_lock(sp_spin_lock_t* lock) {
   while (!sp_spin_try_lock(lock)) {
-    while (*lock) {
+    while (*(volatile sp_spin_lock_t*)lock) {
       sp_spin_pause();
     }
   }
@@ -10837,377 +14355,115 @@ void sp_spin_unlock(sp_spin_lock_t* lock) {
     __sync_lock_release(lock);
   #elif defined(SP_MSVC)
     _InterlockedExchange((LONG*)lock, 0);
+  #elif defined(SP_TCC) && defined(SP_AMD64)
+    __asm__ __volatile__("" : : : "memory");
+    *(volatile s32*)lock = 0;
   #else
-    sp_mutex_lock(&sp_rt.mutex);
-    *lock = 0;
-    sp_mutex_unlock(&sp_rt.mutex);
+    #error "sp_spin_unlock"
   #endif
 }
 
 // @atomic
-bool sp_atomic_s32_cas(sp_atomic_s32_t* value, s32 current, s32 desired) {
-  #if defined(SP_MSVC)
-    return _InterlockedCompareExchange((long*)value, desired, current) == current;
-  #elif defined(SP_GNUC)
-    return __sync_bool_compare_and_swap(value, current, desired);
-  #else
-    bool result = false;
-    size_t index = ((((size_t)value) >> 3) & 0x1f);
-    sp_spin_lock(&sp_rt.locks[index]);
-    if (*value == current) {
-      *value = desired;
-      result = true;
-    }
-    sp_spin_unlock(&sp_rt.locks[index]);
-    return result;
-  #endif
-}
-
-s32 sp_atomic_s32_set(sp_atomic_s32_t* value, s32 desired) {
-  #if defined(SP_MSVC)
-    return _InterlockedExchange((long*)value, desired);
-  #elif defined(SP_GNUC)
-    return __sync_lock_test_and_set(value, desired);
-  #else
-    s32 old;
-    do {
-      old = *value;
-    } while (!sp_atomic_s32_cas(value, old, desired));
-    return old;
-  #endif
-}
-
-s32 sp_atomic_s32_add(sp_atomic_s32_t* value, s32 add) {
-  #if defined(SP_MSVC)
-    return _InterlockedExchangeAdd((long*)value, add);
-  #elif defined(SP_GNUC)
-    return __sync_fetch_and_add(value, add);
-  #else
-    s32 old;
-    do {
-      old = *value;
-    } while (!sp_atomic_s32_cas(value, old, old + add));
-    return old;
-  #endif
-}
-
-s32 sp_atomic_s32_get(sp_atomic_s32_t* value) {
-  #if defined(SP_MSVC)
-    return _InterlockedOr((long*)value, 0);
-  #elif defined(SP_GNUC)
-    return __sync_or_and_fetch(value, 0);
-  #else
-    s32 old;
-    do {
-      old = *value;
-    } while (!sp_atomic_s32_cas(value, old, old));
-    return old;
-  #endif
-}
-
-bool sp_atomic_ptr_cas(sp_atomic_ptr_t* value, void* current, void* desired) {
-  #if defined(SP_MSVC)
-    return _InterlockedCompareExchangePointer(value, desired, current) == current;
-  #elif defined(SP_GNUC)
-    return __sync_bool_compare_and_swap(value, current, desired);
-  #else
-    bool result = false;
-    size_t index = ((((size_t)value) >> 3) & 0x1f);
-    sp_spin_lock(&sp_rt.locks[index]);
-    if (*value == current) {
-      *value = desired;
-      result = true;
-    }
-    sp_spin_unlock(&sp_rt.locks[index]);
-    return result;
-  #endif
-}
-
-void* sp_atomic_ptr_set(sp_atomic_ptr_t* value, void* desired) {
-  #if defined(SP_MSVC)
-    return _InterlockedExchangePointer(value, desired);
-  #elif defined(SP_GNUC)
-    void* old;
-    do {
-      old = *value;
-    } while (!__sync_bool_compare_and_swap(value, old, desired));
-    return old;
-  #else
-    void* old;
-    do {
-      old = *value;
-    } while (!sp_atomic_ptr_cas(value, old, desired));
-    return old;
-  #endif
-}
-
-void* sp_atomic_ptr_get(sp_atomic_ptr_t* value) {
-  #if defined(SP_MSVC)
-    return _InterlockedCompareExchangePointer(value, SP_NULLPTR, SP_NULLPTR);
-  #elif defined(SP_GNUC)
-    return __sync_val_compare_and_swap(value, SP_NULLPTR, SP_NULLPTR);
-  #else
-    void* old;
-    do {
-      old = *value;
-    } while (!sp_atomic_ptr_cas(value, old, old));
-    return old;
-  #endif
+sp_spin_lock_t* sp_spin_lock_get(void* addr) {
+  return &sp_rt.locks[(((size_t)addr) >> 3) % SP_RT_NUM_SPIN_LOCKS];
 }
 
 // @semaphore
-#if defined(SP_WIN32)
 void sp_semaphore_init(sp_semaphore_t* semaphore) {
-  *semaphore = CreateSemaphoreW(NULL, 0, 0x7FFFFFF, NULL);
+  semaphore->count = 0;
 }
 
 void sp_semaphore_destroy(sp_semaphore_t* semaphore) {
-  CloseHandle(*semaphore);
+  sp_unused(semaphore);
 }
 
-void sp_semaphore_wait(sp_semaphore_t* semaphore) {
-  WaitForSingleObject(*semaphore, INFINITE);
-}
-
-bool sp_semaphore_wait_for(sp_semaphore_t* semaphore, u32 ms) {
-  sp_win32_dword_t result = WaitForSingleObject(*semaphore, ms);
-  return result == WAIT_OBJECT_0;
-}
-
-void sp_semaphore_signal(sp_semaphore_t* semaphore) {
-  ReleaseSemaphore(*semaphore, 1, NULL);
-}
-#elif defined(SP_MACOS)
-void sp_semaphore_init(sp_semaphore_t* semaphore) {
-    *semaphore = dispatch_semaphore_create(0);
-}
-
-void sp_semaphore_destroy(sp_semaphore_t* semaphore) {
-  dispatch_release(*semaphore);
-}
-
-void sp_semaphore_wait(sp_semaphore_t* semaphore) {
-    dispatch_semaphore_wait(*semaphore, DISPATCH_TIME_FOREVER);
-}
-
-bool sp_semaphore_wait_for(sp_semaphore_t* semaphore, u32 ms) {
-    dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, ms * NSEC_PER_MSEC);
-    return dispatch_semaphore_wait(*semaphore, timeout) == 0;
-}
-
-void sp_semaphore_signal(sp_semaphore_t* semaphore) {
-    dispatch_semaphore_signal(*semaphore);
-}
-#elif defined(SP_POSIX)
-void sp_semaphore_init(sp_semaphore_t* semaphore) {
-  sem_init(semaphore, 0, 0);
-}
-
-void sp_semaphore_destroy(sp_semaphore_t* semaphore) {
-  sem_destroy(semaphore);
-}
-
-void sp_semaphore_wait(sp_semaphore_t* semaphore) {
-  sem_wait(semaphore);
-}
-
-bool sp_semaphore_wait_for(sp_semaphore_t* semaphore, u32 ms) {
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-  ts.tv_sec += ms / 1000;
-  ts.tv_nsec += (ms % 1000) * 1000000;
-  if (ts.tv_nsec >= 1000000000) {
-    ts.tv_sec++;
-    ts.tv_nsec -= 1000000000;
+bool sp_semaphore_try_wait(sp_semaphore_t* semaphore) {
+  while (true) {
+    u32 count = sp_atomic_u32_load(&semaphore->count, SP_ATOMIC_RELAXED);
+    if (!count) return false;
+    if (sp_atomic_u32_cas(&semaphore->count, count, count - 1, SP_ATOMIC_ACQUIRE)) return true;
   }
-  return sem_timedwait(semaphore, &ts) == 0;
-}
-
-void sp_semaphore_signal(sp_semaphore_t* semaphore) {
-  sem_post(semaphore);
-}
-
-#else
-void sp_semaphore_init(sp_semaphore_t* semaphore) {
-  SP_UNIMPLEMENTED();
-}
-
-void sp_semaphore_destroy(sp_semaphore_t* semaphore) {
-  SP_UNIMPLEMENTED();
 }
 
 void sp_semaphore_wait(sp_semaphore_t* semaphore) {
-  SP_UNIMPLEMENTED();
+  while (!sp_semaphore_try_wait(semaphore)) {
+    sp_sys_futex_wait(&semaphore->count, 0, SP_NULLPTR);
+  }
 }
 
 bool sp_semaphore_wait_for(sp_semaphore_t* semaphore, u32 ms) {
-  SP_UNIMPLEMENTED();
+  sp_tm_timer_t timer = sp_tm_start_timer();
+  u64 budget = sp_tm_ms_to_ns(ms);
+  while (!sp_semaphore_try_wait(semaphore)) {
+    u64 elapsed = sp_tm_read_timer(&timer);
+    if (elapsed >= budget) return false;
+    sp_sys_timespec_t timeout = sp_sys_timespec_from_ns(budget - elapsed);
+    if (!sp_sys_futex_wait(&semaphore->count, 0, &timeout)) return false;
+  }
   return true;
 }
 
 void sp_semaphore_signal(sp_semaphore_t* semaphore) {
-  SP_UNIMPLEMENTED();
+  sp_atomic_u32_add(&semaphore->count, 1, SP_ATOMIC_RELEASE);
+  sp_sys_futex_wake(&semaphore->count);
 }
-#endif
 
 // @mutex
-#if defined(SP_WIN32)
-s32 sp_mutex_kind_to_c11(sp_mutex_kind_t kind) {
-  return kind;
-}
-
-void sp_mutex_init(sp_mutex_t* mutex, sp_mutex_kind_t kind) {
-  SP_UNUSED(kind);
-  InitializeCriticalSection(mutex);
+void sp_mutex_init(sp_mutex_t* mutex) {
+  mutex->state = SP_MUTEX_UNLOCKED;
 }
 
 void sp_mutex_lock(sp_mutex_t* mutex) {
-  EnterCriticalSection(mutex);
-}
-
-void sp_mutex_unlock(sp_mutex_t* mutex) {
-  LeaveCriticalSection(mutex);
-}
-
-void sp_mutex_destroy(sp_mutex_t* mutex) {
-  DeleteCriticalSection(mutex);
-}
-
-#elif defined(SP_POSIX)
-void sp_mutex_init(sp_mutex_t* mutex, sp_mutex_kind_t kind) {
-  pthread_mutexattr_t attr;
-  pthread_mutexattr_init(&attr);
-
-  if (kind & SP_MUTEX_RECURSIVE) {
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+  if (sp_atomic_u32_cas(&mutex->state, SP_MUTEX_UNLOCKED, SP_MUTEX_LOCKED, SP_ATOMIC_ACQUIRE)) return;
+  while (sp_atomic_u32_exchange(&mutex->state, SP_MUTEX_CONTENDED, SP_ATOMIC_ACQUIRE) != SP_MUTEX_UNLOCKED) {
+    sp_sys_futex_wait(&mutex->state, SP_MUTEX_CONTENDED, SP_NULLPTR);
   }
-
-  pthread_mutex_init(mutex, &attr);
-  pthread_mutexattr_destroy(&attr);
-}
-
-void sp_mutex_lock(sp_mutex_t* mutex) {
-  pthread_mutex_lock(mutex);
 }
 
 void sp_mutex_unlock(sp_mutex_t* mutex) {
-  pthread_mutex_unlock(mutex);
-}
-
-void sp_mutex_destroy(sp_mutex_t* mutex) {
-  pthread_mutex_destroy(mutex);
-}
-
-#else
-void sp_mutex_init(sp_mutex_t* mutex, sp_mutex_kind_t kind) {
-  sp_unused(mutex);
-  sp_unused(kind);
-}
-
-void sp_mutex_lock(sp_mutex_t* mutex) {
-  sp_unused(mutex);
-}
-
-void sp_mutex_unlock(sp_mutex_t* mutex) {
-  sp_unused(mutex);
+  if (sp_atomic_u32_exchange(&mutex->state, SP_MUTEX_UNLOCKED, SP_ATOMIC_RELEASE) == SP_MUTEX_CONTENDED) {
+    sp_sys_futex_wake(&mutex->state);
+  }
 }
 
 void sp_mutex_destroy(sp_mutex_t* mutex) {
   sp_unused(mutex);
 }
-
-#endif
 
 // @cv
-#if defined(SP_WIN32)
-void sp_cv_init(sp_cv_t* cond) {
-  InitializeConditionVariable(cond);
+void sp_cv_init(sp_cv_t* cv) {
+  cv->seq = 0;
 }
 
-void sp_cv_destroy(sp_cv_t* cond) {
-  SP_UNUSED(cond);
+void sp_cv_destroy(sp_cv_t* cv) {
+  sp_unused(cv);
 }
 
-void sp_cv_wait(sp_cv_t* cond, sp_mutex_t* mutex) {
-  SleepConditionVariableCS(cond, mutex, INFINITE);
+void sp_cv_wait(sp_cv_t* cv, sp_mutex_t* mutex) {
+  u32 seq = sp_atomic_u32_load(&cv->seq, SP_ATOMIC_RELAXED);
+  sp_mutex_unlock(mutex);
+  sp_sys_futex_wait(&cv->seq, seq, SP_NULLPTR);
+  sp_mutex_lock(mutex);
 }
 
-bool sp_cv_wait_for(sp_cv_t* cond, sp_mutex_t* mutex, u32 ms) {
-  return SleepConditionVariableCS(cond, mutex, (DWORD)ms) != 0;
+bool sp_cv_wait_for(sp_cv_t* cv, sp_mutex_t* mutex, u32 ms) {
+  u32 seq = sp_atomic_u32_load(&cv->seq, SP_ATOMIC_RELAXED);
+  sp_mutex_unlock(mutex);
+  sp_sys_timespec_t timeout = sp_sys_timespec_from_ns(sp_tm_ms_to_ns(ms));
+  bool woken = sp_sys_futex_wait(&cv->seq, seq, &timeout);
+  sp_mutex_lock(mutex);
+  return woken;
 }
 
-void sp_cv_notify_one(sp_cv_t* cond) {
-  WakeConditionVariable(cond);
+void sp_cv_notify_one(sp_cv_t* cv) {
+  sp_atomic_u32_add(&cv->seq, 1, SP_ATOMIC_RELAXED);
+  sp_sys_futex_wake(&cv->seq);
 }
 
-void sp_cv_notify_all(sp_cv_t* cond) {
-  WakeAllConditionVariable(cond);
+void sp_cv_notify_all(sp_cv_t* cv) {
+  sp_atomic_u32_add(&cv->seq, 1, SP_ATOMIC_RELAXED);
+  sp_sys_futex_wake_all(&cv->seq);
 }
-
-#elif defined(SP_POSIX)
-void sp_cv_init(sp_cv_t* cond) {
-  pthread_cond_init(cond, NULL);
-}
-
-void sp_cv_destroy(sp_cv_t* cond) {
-  pthread_cond_destroy(cond);
-}
-
-void sp_cv_wait(sp_cv_t* cond, sp_mutex_t* mutex) {
-  pthread_cond_wait(cond, mutex);
-}
-
-bool sp_cv_wait_for(sp_cv_t* cond, sp_mutex_t* mutex, u32 ms) {
-  sp_tm_epoch_t now = sp_tm_now_epoch();
-
-  struct timespec ts = {
-    .tv_sec = (time_t)(now.s + (ms / 1000)),
-    .tv_nsec = now.ns + ((ms % 1000) * 1000000),
-  };
-
-  if (ts.tv_nsec >= 1000000000) {
-    ts.tv_sec++;
-    ts.tv_nsec -= 1000000000;
-  }
-
-  return pthread_cond_timedwait(cond, mutex, &ts) == 0;
-}
-
-void sp_cv_notify_one(sp_cv_t* cond) {
-  pthread_cond_signal(cond);
-}
-
-void sp_cv_notify_all(sp_cv_t* cond) {
-  pthread_cond_broadcast(cond);
-}
-
-#else
-void sp_cv_init(sp_cv_t* cond) {
-  SP_UNIMPLEMENTED();
-}
-
-void sp_cv_destroy(sp_cv_t* cond) {
-  SP_UNIMPLEMENTED();
-}
-
-void sp_cv_wait(sp_cv_t* cond, sp_mutex_t* mutex) {
-  SP_UNIMPLEMENTED();
-}
-
-bool sp_cv_wait_for(sp_cv_t* cond, sp_mutex_t* mutex, u32 ms) {
-  SP_UNIMPLEMENTED();
-  return true;
-}
-
-void sp_cv_notify_one(sp_cv_t* cond) {
-  SP_UNIMPLEMENTED();
-}
-
-void sp_cv_notify_all(sp_cv_t* cond) {
-  SP_UNIMPLEMENTED();
-}
-
-#endif
 
 // @thread
 #if defined(SP_WIN32)
@@ -11221,7 +14477,6 @@ void sp_thread_init(sp_thread_t* thread, sp_thread_fn_t fn, void* userdata) {
   *launch = SP_RVAL(sp_thread_launch_t) {
     .fn = fn,
     .userdata = userdata,
-    .semaphore = sp_zero_s(sp_semaphore_t)
   };
   sp_semaphore_init(&launch->semaphore);
 
@@ -11250,6 +14505,10 @@ void sp_thread_join(sp_thread_t* thread) {
   WaitForSingleObject(*thread, INFINITE);
   CloseHandle(*thread);
   *thread = SP_NULLPTR;
+}
+
+u64 sp_thread_get_id() {
+  return (u64)GetCurrentThreadId();
 }
 
 #elif defined(SP_POSIX)
@@ -11283,6 +14542,16 @@ void sp_thread_init(sp_thread_t* thread, sp_thread_fn_t fn, void* userdata) {
   sp_semaphore_destroy(&launch.semaphore);
 }
 
+u64 sp_thread_get_id() {
+  #if defined(SP_LINUX)
+    return (u64)sp_syscall0(SP_SYSCALL_NUM_GETTID);
+  #elif defined(SP_MACOS)
+    u64 id = 0;
+    pthread_threadid_np(SP_NULLPTR, &id);
+    return id;
+  #endif
+}
+
 #elif defined(SP_WASM) || defined(SP_FREESTANDING)
 s32 sp_thread_launch(void* args) {
   sp_thread_launch_t* launch = (sp_thread_launch_t*)args;
@@ -11303,10 +14572,15 @@ void sp_thread_init(sp_thread_t* thread, sp_thread_fn_t fn, void* userdata) {
   SP_UNIMPLEMENTED();
 }
 
+u64 sp_thread_get_id() {
+  return 1;
+}
+
 #else
 #error "sp_thread_launch"
 #error "sp_thread_join"
 #error "sp_thread_init"
+#error "sp_thread_get_id"
 #endif
 
 
@@ -11342,10 +14616,7 @@ struct sp_ps_os {
 };
 
 SP_PRIVATE void sp_ps_set_cwd(posix_spawn_file_actions_t* fa, sp_str_t cwd);
-SP_PRIVATE bool sp_ps_create_pipes(s32 pipes [2]);
 SP_PRIVATE sp_da(c8*) sp_ps_build_posix_args(sp_mem_t mem, sp_ps_config_t* config);
-SP_PRIVATE void sp_ps_set_nonblocking(s32 fd);
-SP_PRIVATE void sp_ps_set_blocking(s32 fd);
 
 SP_PRIVATE sp_env_t sp_ps_build_env(sp_ps_env_config_t* config, sp_mem_t mem) {
   sp_env_t env = sp_zero;
@@ -11375,27 +14646,6 @@ SP_PRIVATE sp_env_t sp_ps_build_env(sp_ps_env_config_t* config, sp_mem_t mem) {
 
 bool sp_ps_is_fd_valid(sp_sys_fd_t fd) {
   return fd > 0;
-}
-
-bool sp_ps_create_pipes(s32 pipes [2]) {
-  if (pipe(pipes) < 0) {
-    return false;
-  }
-
-  fcntl(pipes[0], F_SETFD, fcntl(pipes[0], F_GETFD) | FD_CLOEXEC);
-  fcntl(pipes[1], F_SETFD, fcntl(pipes[1], F_GETFD) | FD_CLOEXEC);
-
-  signal(SIGPIPE, SIG_IGN);
-
-  return true;
-}
-
-void sp_ps_set_nonblocking(s32 fd) {
-  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-}
-
-void sp_ps_set_blocking(s32 fd) {
-  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
 }
 
 sp_da(c8*) sp_ps_build_posix_args(sp_mem_t mem, sp_ps_config_t* config) {
@@ -11467,62 +14717,65 @@ void sp_ps_config_add_arg(sp_mem_t mem, sp_ps_config_t* config, sp_str_t arg) {
   }
 }
 
-void sp_ps_configure_io_in(sp_ps_io_in_config_t* io, sp_ps_stdio_config_entry_t* p) {
+bool sp_ps_configure_io_in(sp_ps_io_in_config_t* io, sp_ps_stdio_config_entry_t* p) {
   switch (io->mode) {
     case SP_PS_IO_MODE_NULL: {
-      SP_ASSERT(posix_spawn_file_actions_addopen(p->fa, p->file_number, "/dev/null", p->flag, p->mode) == 0);
-      break;
+      return posix_spawn_file_actions_addopen(p->fa, p->file_number, "/dev/null", p->flag, p->mode) == 0;
     }
     case SP_PS_IO_MODE_CREATE: {
-      s32 pipes [2] = { -1, -1 };
-      SP_ASSERT(sp_ps_create_pipes(pipes));
-      p->pipes.read = pipes[0];
-      p->pipes.write = pipes[1];
-      SP_ASSERT(posix_spawn_file_actions_adddup2(p->fa, p->pipes.read, p->file_number) == 0);
-      break;
+      sp_sys_pipe_t pipes = sp_zero;
+      if (sp_sys_pipe(&pipes, sp_zero_s(sp_sys_pipe_desc_t)) != SP_OK) {
+        return false;
+      }
+      p->pipes.read = pipes.r;
+      p->pipes.write = pipes.w;
+      return posix_spawn_file_actions_adddup2(p->fa, p->pipes.read, p->file_number) == 0;
     }
     case SP_PS_IO_MODE_EXISTING: {
-      SP_ASSERT(io->fd);
-      SP_ASSERT(posix_spawn_file_actions_adddup2(p->fa, io->fd, p->file_number) == 0);
-      break;
+      if (!io->fd) {
+        return false;
+      }
+      return posix_spawn_file_actions_adddup2(p->fa, io->fd, p->file_number) == 0;
     }
     case SP_PS_IO_MODE_REDIRECT: {
-      break;
+      return true;
     }
     case SP_PS_IO_MODE_INHERIT: {
-      break;
+      return true;
     }
   }
+  SP_UNREACHABLE_RETURN(false);
 }
 
-void sp_ps_configure_io_out(sp_ps_io_out_config_t* io, sp_ps_stdio_config_entry_t* p) {
+bool sp_ps_configure_io_out(sp_ps_io_out_config_t* io, sp_ps_stdio_config_entry_t* p) {
   switch (io->mode) {
     case SP_PS_IO_MODE_NULL: {
-      SP_ASSERT(posix_spawn_file_actions_addopen(p->fa, p->file_number, "/dev/null", p->flag, p->mode) == 0);
-      break;
+      return posix_spawn_file_actions_addopen(p->fa, p->file_number, "/dev/null", p->flag, p->mode) == 0;
     }
     case SP_PS_IO_MODE_CREATE: {
-      s32 pipes [2] = { -1, -1 };
-      SP_ASSERT(sp_ps_create_pipes(pipes));
-      p->pipes.read = pipes[0];
-      p->pipes.write = pipes[1];
-      SP_ASSERT(posix_spawn_file_actions_adddup2(p->fa, p->pipes.write, p->file_number) == 0);
-      break;
+      sp_sys_pipe_t pipes = sp_zero;
+      if (sp_sys_pipe(&pipes, sp_zero_s(sp_sys_pipe_desc_t)) != SP_OK) {
+        return false;
+      }
+      p->pipes.read = pipes.r;
+      p->pipes.write = pipes.w;
+      return posix_spawn_file_actions_adddup2(p->fa, p->pipes.write, p->file_number) == 0;
     }
     case SP_PS_IO_MODE_EXISTING: {
-      SP_ASSERT(io->fd);
-      SP_ASSERT(posix_spawn_file_actions_adddup2(p->fa, io->fd, p->file_number) == 0);
-      break;
+      if (!io->fd) {
+        return false;
+      }
+      return posix_spawn_file_actions_adddup2(p->fa, io->fd, p->file_number) == 0;
     }
     case SP_PS_IO_MODE_REDIRECT: {
       s32 redirect = p->file_number == SP_PS_IO_FILENO_STDOUT ? SP_PS_IO_FILENO_STDERR : SP_PS_IO_FILENO_STDOUT;
-      SP_ASSERT(posix_spawn_file_actions_adddup2(p->fa, redirect, p->file_number) == 0);
-      break;
+      return posix_spawn_file_actions_adddup2(p->fa, redirect, p->file_number) == 0;
     }
     case SP_PS_IO_MODE_INHERIT: {
-      break;
+      return true;
     }
   }
+  SP_UNREACHABLE_RETURN(false);
 }
 
 c8** sp_env_to_posix_envp(sp_mem_t mem, sp_env_t* env) {
@@ -11591,19 +14844,19 @@ sp_ps_t sp_ps_create(sp_mem_t mem, sp_ps_config_t config) {
     },
   };
 
-  sp_ps_configure_io_in(&proc.io.in, &io.in);
+  bool io_ok = sp_ps_configure_io_in(&proc.io.in, &io.in);
 
   if (proc.io.out.mode == SP_PS_IO_MODE_REDIRECT) {
-    sp_ps_configure_io_out(&proc.io.err, &io.err);
-    sp_ps_configure_io_out(&proc.io.out, &io.out);
+    io_ok = io_ok && sp_ps_configure_io_out(&proc.io.err, &io.err);
+    io_ok = io_ok && sp_ps_configure_io_out(&proc.io.out, &io.out);
   }
   else {
-    sp_ps_configure_io_out(&proc.io.out, &io.out);
-    sp_ps_configure_io_out(&proc.io.err, &io.err);
+    io_ok = io_ok && sp_ps_configure_io_out(&proc.io.out, &io.out);
+    io_ok = io_ok && sp_ps_configure_io_out(&proc.io.err, &io.err);
   }
 
   pid_t pid;
-  s32 spawn_result = posix_spawnp(&pid, argv[0], &fa, &attr, argv, envp);
+  s32 spawn_result = io_ok ? posix_spawnp(&pid, argv[0], &fa, &attr, argv, envp) : -1;
   sp_mem_end_scratch(scratch);
 
   if (spawn_result != 0) {
@@ -11619,33 +14872,22 @@ sp_ps_t sp_ps_create(sp_mem_t mem, sp_ps_config_t config) {
   proc.os = sp_alloc_type(mem, sp_ps_os_t);
   proc.os->pid = pid;
 
+  proc.io.in.fd = 0;
+  proc.io.out.fd = 0;
+  proc.io.err.fd = 0;
+
   if (io.in.pipes.read >= 0) {
     sp_sys_close(io.in.pipes.read);
-
-    switch (config.io.in.block) {
-      case SP_PS_IO_NONBLOCKING: { sp_ps_set_nonblocking(io.in.pipes.write); break; }
-      case SP_PS_IO_BLOCKING: { sp_ps_set_blocking(io.in.pipes.write); break; }
-    }
     proc.io.in.fd = io.in.pipes.write;
   }
 
   if (io.out.pipes.read >= 0) {
     sp_sys_close(io.out.pipes.write);
-
-    switch (config.io.out.block) {
-      case SP_PS_IO_NONBLOCKING: { sp_ps_set_nonblocking(io.out.pipes.read); break; }
-      case SP_PS_IO_BLOCKING: { sp_ps_set_blocking(io.out.pipes.read); break; }
-    }
     proc.io.out.fd = io.out.pipes.read;
   }
 
   if (io.err.pipes.read >= 0) {
     sp_sys_close(io.err.pipes.write);
-
-    switch (config.io.err.block) {
-      case SP_PS_IO_NONBLOCKING: { sp_ps_set_nonblocking(io.err.pipes.read); break; }
-      case SP_PS_IO_BLOCKING:    { sp_ps_set_blocking(io.err.pipes.read);    break; }
-    }
     proc.io.err.fd = io.err.pipes.read;
   }
 
@@ -11664,7 +14906,11 @@ sp_ps_output_t sp_ps_run(sp_mem_t mem, sp_ps_config_t config) {
     .mode = SP_PS_IO_MODE_CREATE
   };
   sp_ps_t ps = sp_ps_create(mem, config);
-  if (ps.os) return sp_ps_output(&ps);
+  if (ps.os) {
+    sp_ps_output_t output = sp_ps_output(&ps);
+    sp_ps_free(&ps);
+    return output;
+  }
   return (sp_ps_output_t) { .status = { .state = SP_PS_STATE_DONE, .exit_code = -1 } };
 }
 
@@ -11693,21 +14939,65 @@ sp_io_close_mode_t sp_ps_io_close_mode(sp_ps_io_mode_t mode) {
   SP_UNREACHABLE_RETURN(SP_IO_CLOSE_MODE_NONE);
 }
 
+SP_PRIVATE void sp_ps_close_owned_fd(sp_sys_fd_t* fd, sp_ps_io_mode_t mode) {
+  if (sp_ps_io_close_mode(mode) != SP_IO_CLOSE_MODE_AUTO) return;
+  if (!sp_ps_is_fd_valid(*fd)) return;
+  sp_sys_close(*fd);
+  *fd = 0;
+}
+
 sp_io_stream_writer_t* sp_ps_io_in(sp_ps_t* ps) {
   if (!ps) return SP_NULLPTR;
   if (!sp_ps_is_fd_valid(ps->io.in.fd)) return SP_NULLPTR;
 
   sp_io_stream_writer_t* writer = sp_alloc_type(ps->mem, sp_io_stream_writer_t);
   sp_io_stream_writer_from_fd(writer, ps->io.in.fd, sp_ps_io_close_mode(ps->io.in.mode));
+  if (sp_ps_io_close_mode(ps->io.in.mode) == SP_IO_CLOSE_MODE_AUTO) {
+    ps->io.in.fd = 0;
+  }
   return writer;
+}
+
+// The pipe fds are blocking; the ps BLOCKING/NONBLOCKING config is reader
+// semantics, implemented here instead of in the fd flags
+typedef struct {
+  sp_io_reader_t base;
+  sp_sys_fd_t fd;
+  sp_ps_io_blocking_t block;
+} sp_ps_posix_reader_t;
+
+SP_PRIVATE sp_err_t sp_ps_posix_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
+  sp_ps_posix_reader_t* r = (sp_ps_posix_reader_t*)reader;
+  if (bytes_read) *bytes_read = 0;
+
+  switch (r->block) {
+    case SP_PS_IO_BLOCKING: {
+      break;
+    }
+    case SP_PS_IO_NONBLOCKING: {
+      u8 ready = 0;
+      sp_err_t err = sp_sys_pipe_ready(r->fd, &ready);
+      if (err != SP_OK) return err;
+      if (!ready) return SP_ERR_SYS_WOULD_BLOCK;
+
+      // ps is the only reader of this pipe, so the polled bytes cannot vanish
+      // and the blocking read completes inline
+      break;
+    }
+  }
+  return sp_sys_read(r->fd, ptr, size, bytes_read);
 }
 
 sp_io_reader_t* sp_ps_io_out(sp_ps_t* ps) {
   if (!ps) return SP_NULLPTR;
   if (!sp_ps_is_fd_valid(ps->io.out.fd)) return SP_NULLPTR;
 
-  sp_io_stream_reader_t* reader = sp_alloc_type(ps->mem, sp_io_stream_reader_t);
-  sp_io_stream_reader_from_fd(reader, ps->io.out.fd, sp_ps_io_close_mode(ps->io.out.mode));
+  sp_ps_posix_reader_t* reader = sp_alloc_type(ps->mem, sp_ps_posix_reader_t);
+  *reader = (sp_ps_posix_reader_t) {
+    .base = { .read = sp_ps_posix_reader_read },
+    .fd = ps->io.out.fd,
+    .block = ps->io.out.block,
+  };
   return &reader->base;
 }
 
@@ -11715,8 +15005,12 @@ sp_io_reader_t* sp_ps_io_err(sp_ps_t* ps) {
   if (!ps) return SP_NULLPTR;
   if (!sp_ps_is_fd_valid(ps->io.err.fd)) return SP_NULLPTR;
 
-  sp_io_stream_reader_t* reader = sp_alloc_type(ps->mem, sp_io_stream_reader_t);
-  sp_io_stream_reader_from_fd(reader, ps->io.err.fd, sp_ps_io_close_mode(ps->io.err.mode));
+  sp_ps_posix_reader_t* reader = sp_alloc_type(ps->mem, sp_ps_posix_reader_t);
+  *reader = (sp_ps_posix_reader_t) {
+    .base = { .read = sp_ps_posix_reader_read },
+    .fd = ps->io.err.fd,
+    .block = ps->io.err.block,
+  };
   return &reader->base;
 }
 
@@ -11726,7 +15020,11 @@ sp_io_reader_t* sp_ps_io_err(sp_ps_t* ps) {
 #if defined(SP_LINUX)
   #define sp_wait4(p, s, o, r)              sp_syscall_wait4(p, s, o, r)
 #else
-  #define sp_wait4(p, s, o, r)              wait4(p, s, o, r)
+SP_PRIVATE s32 sp_ps_wait4(s32 pid, s32* status, s32 options, void* rusage) {
+  s32 rc = (s32)wait4(pid, status, options, (struct rusage*)rusage);
+  return rc < 0 ? -errno : rc;
+}
+  #define sp_wait4(p, s, o, r)              sp_ps_wait4(p, s, o, r)
 #endif
 
 sp_ps_status_t sp_ps_poll(sp_ps_t* ps, u32 timeout_ms) {
@@ -11762,7 +15060,7 @@ sp_ps_status_t sp_ps_poll(sp_ps_t* ps, u32 timeout_ms) {
 
       return result;
     }
-    else if (wait_result < 0 && errno == SP_EINTR) {
+    else if (wait_result == -SP_EINTR) {
       continue;
     }
     else if (wait_result < 0) {
@@ -11796,7 +15094,7 @@ sp_ps_status_t sp_ps_wait(sp_ps_t* ps) {
 
   do {
     wait_result = sp_wait4(ps->os->pid, &wait_status, SP_POSIX_WAITPID_BLOCK, SP_NULLPTR);
-  } while (wait_result == -1 && errno == SP_EINTR);
+  } while (wait_result == -SP_EINTR);
 
   if (wait_result < 0) {
     result.state = SP_PS_STATE_DONE;
@@ -11823,6 +15121,8 @@ sp_ps_output_t sp_ps_output(sp_ps_t* ps) {
   sp_ps_output_t result = sp_zero;
   u8 buffer[4096];
 
+  sp_ps_close_owned_fd(&ps->io.in.fd, ps->io.in.mode);
+
   struct {
     sp_io_reader_t* out;
     sp_io_reader_t* err;
@@ -11839,7 +15139,6 @@ sp_ps_output_t sp_ps_output(sp_ps_t* ps) {
   sp_io_dyn_mem_writer_init(ps->mem, &write.err);
 
   sp_sys_fd_t fds[2];
-  u8 ready[2];
   sp_io_reader_t* readers[2];
   sp_io_writer_t* writers[2];
   s32 nfds = 0;
@@ -11858,28 +15157,33 @@ sp_ps_output_t sp_ps_output(sp_ps_t* ps) {
   }
 
   while (nfds > 0) {
-    s32 ret = sp_sys_fds_wait(fds, ready, (u64)nfds);
-    if (ret < 0) break;
-
-    sp_for(i, (u32)nfds) {
-      if (!ready[i]) {
-        continue;
-      }
-
-      u64 n = 0;
-      sp_io_read(readers[i], buffer, sizeof(buffer), &n);
-      if (n > 0) {
-        sp_io_write_str(writers[i], sp_str((c8*)buffer, n), SP_NULLPTR);
-      } else {
-        fds[i] = fds[nfds - 1];
-        ready[i] = ready[nfds - 1];
-        readers[i] = readers[nfds - 1];
-        writers[i] = writers[nfds - 1];
-        nfds--;
-        i--;
-      }
+    u64 signaled = 0;
+    sp_err_t wait_err = sp_sys_posix_poll(fds, (u64)nfds, 0, &signaled);
+    if (wait_err != SP_OK) {
+      if (result.error == SP_OK) result.error = wait_err;
+      break;
     }
+
+    u32 i = (u32)signaled;
+    u64 n = 0;
+    sp_err_t read_err = sp_io_read(readers[i], buffer, sizeof(buffer), &n);
+    if (n > 0) {
+      sp_io_write_str(writers[i], sp_str((c8*)buffer, n), SP_NULLPTR);
+    }
+    if (read_err == SP_OK && n > 0) continue;
+    if (read_err == SP_ERR_SYS_WOULD_BLOCK) continue;
+
+    if (read_err != SP_OK && read_err != SP_ERR_IO_EOF && result.error == SP_OK) {
+      result.error = read_err;
+    }
+    fds[i] = fds[nfds - 1];
+    readers[i] = readers[nfds - 1];
+    writers[i] = writers[nfds - 1];
+    nfds--;
   }
+
+  sp_ps_close_owned_fd(&ps->io.out.fd, ps->io.out.mode);
+  sp_ps_close_owned_fd(&ps->io.err.fd, ps->io.err.mode);
 
   result.out = sp_io_dyn_mem_writer_take_str(&write.out);
   result.err = sp_io_dyn_mem_writer_take_str(&write.err);
@@ -11895,7 +15199,13 @@ bool sp_ps_kill(sp_ps_t* ps) {
 }
 
 void sp_ps_free(sp_ps_t* ps) {
-  if (!ps || !ps->os) return;
+  if (!ps) return;
+
+  sp_ps_close_owned_fd(&ps->io.in.fd, ps->io.in.mode);
+  sp_ps_close_owned_fd(&ps->io.out.fd, ps->io.out.mode);
+  sp_ps_close_owned_fd(&ps->io.err.fd, ps->io.err.mode);
+
+  if (!ps->os) return;
   sp_free(ps->mem, ps->os, sizeof(*ps->os));
   ps->os = SP_NULLPTR;
 }
@@ -11910,6 +15220,8 @@ void sp_ps_output_free(sp_mem_t mem, sp_ps_output_t* output) {
 #elif defined(SP_WIN32)
 struct sp_ps_os {
   sp_win32_handle_t pid;
+  sp_win32_overlapped_t out;
+  sp_win32_overlapped_t err;
 };
 
 bool sp_ps_is_fd_valid(sp_sys_fd_t fd) {
@@ -11931,6 +15243,13 @@ sp_io_close_mode_t sp_ps_io_close_mode(sp_ps_io_mode_t mode) {
     }
   }
   SP_UNREACHABLE_RETURN(SP_IO_CLOSE_MODE_NONE);
+}
+
+SP_PRIVATE void sp_ps_close_owned_fd(sp_sys_fd_t* fd, sp_ps_io_mode_t mode) {
+  if (sp_ps_io_close_mode(mode) != SP_IO_CLOSE_MODE_AUTO) return;
+  if (!sp_ps_is_fd_valid(*fd)) return;
+  sp_sys_close(*fd);
+  *fd = SP_SYS_INVALID_FD;
 }
 
 void sp_ps_win32_append_quoted_arg(sp_io_writer_t* builder, sp_str_t arg) {
@@ -12024,6 +15343,7 @@ sp_win32_handle_t sp_ps_win32_fd_to_handle(sp_sys_fd_t fd) {
 typedef struct {
   sp_win32_handle_t child;
   sp_sys_fd_t parent_fd;
+  sp_win32_handle_t event;
 } sp_ps_win32_stdio_entry_t;
 
 typedef struct {
@@ -12037,6 +15357,7 @@ typedef struct {
 sp_err_t sp_ps_win32_configure_io_in(sp_ps_io_in_config_t* io, sp_ps_win32_stdio_entry_t* entry) {
   entry->child = SP_NULLPTR;
   entry->parent_fd = SP_SYS_INVALID_FD;
+  entry->event = SP_NULLPTR;
 
   switch (io->mode) {
     case SP_PS_IO_MODE_NULL: {
@@ -12044,21 +15365,12 @@ sp_err_t sp_ps_win32_configure_io_in(sp_ps_io_in_config_t* io, sp_ps_win32_stdio
       return ((entry->child != SP_NULLPTR) && (entry->child != INVALID_HANDLE_VALUE)) ? SP_OK : SP_ERR;
     }
     case SP_PS_IO_MODE_CREATE: {
-      SECURITY_ATTRIBUTES attrs = sp_zero;
-      attrs.nLength = sizeof(attrs);
-      attrs.bInheritHandle = true;
+      sp_sys_pipe_t pipe = sp_zero;
+      sp_err_t err = sp_sys_pipe(&pipe, (sp_sys_pipe_desc_t) { .r = SP_SYS_INHERITED });
+      if (err != SP_OK) return err;
 
-      sp_win32_handle_t child_read = SP_NULLPTR;
-      sp_win32_handle_t parent_write = SP_NULLPTR;
-      if (!CreatePipe(&child_read, &parent_write, &attrs, 0)) {
-        return SP_ERR;
-      }
-
-      // When we CreateProcess, the child shouldn't inherit the handle the parent uses to write to its input
-      SetHandleInformation(parent_write, HANDLE_FLAG_INHERIT, 0);
-
-      entry->child = child_read;
-      entry->parent_fd = (sp_sys_fd_t)parent_write;
+      entry->child = (sp_win32_handle_t)pipe.r;
+      entry->parent_fd = pipe.w;
       return SP_OK;
     }
     case SP_PS_IO_MODE_EXISTING: {
@@ -12086,6 +15398,7 @@ sp_err_t sp_ps_win32_configure_io_in(sp_ps_io_in_config_t* io, sp_ps_win32_stdio
 sp_err_t sp_ps_win32_configure_io_out(sp_ps_io_out_config_t* io, sp_win32_dword_t std_handle, sp_win32_dword_t null_access, sp_ps_win32_stdio_entry_t* entry) {
   entry->child = SP_NULLPTR;
   entry->parent_fd = SP_SYS_INVALID_FD;
+  entry->event = SP_NULLPTR;
 
   switch (io->mode) {
     case SP_PS_IO_MODE_NULL: {
@@ -12093,20 +15406,27 @@ sp_err_t sp_ps_win32_configure_io_out(sp_ps_io_out_config_t* io, sp_win32_dword_
       return ((entry->child != SP_NULLPTR) && (entry->child != INVALID_HANDLE_VALUE)) ? SP_OK : SP_ERR;
     }
     case SP_PS_IO_MODE_CREATE: {
-      SECURITY_ATTRIBUTES attrs = sp_zero;
-      attrs.nLength = sizeof(attrs);
-      attrs.bInheritHandle = true;
+      // The parent's read end is always overlapped: the ps BLOCKING/NONBLOCKING
+      // config is reader semantics, implemented in sp_ps_win32_reader_read
+      sp_sys_pipe_t pipe = sp_zero;
+      sp_sys_win32_pipe_desc_t desc = {
+        .r = { .io = SP_SYS_WIN32_PIPE_OVERLAPPED },
+        .w = { .inherited = SP_SYS_INHERITED },
+      };
+      sp_err_t err = sp_sys_win32_pipe(&pipe, desc);
+      if (err != SP_OK) return err;
 
-      sp_win32_handle_t parent_read = SP_NULLPTR;
-      sp_win32_handle_t child_write = SP_NULLPTR;
-      if (!CreatePipe(&parent_read, &child_write, &attrs, 0)) {
-        return SP_ERR;
+      // Manual reset so a wait observes a completion without consuming it
+      entry->event = CreateEventW(SP_NULLPTR, true, false, SP_NULLPTR);
+      if (!entry->event) {
+        sp_err_t event_err = sp_sys_err_from_win32(GetLastError());
+        sp_sys_close(pipe.r);
+        sp_sys_close(pipe.w);
+        return event_err;
       }
 
-      SetHandleInformation(parent_read, HANDLE_FLAG_INHERIT, 0);
-
-      entry->child = child_write;
-      entry->parent_fd = (sp_sys_fd_t)parent_read;
+      entry->child = (sp_win32_handle_t)pipe.w;
+      entry->parent_fd = pipe.r;
       return SP_OK;
     }
     case SP_PS_IO_MODE_EXISTING: {
@@ -12154,11 +15474,28 @@ void sp_ps_win32_close_child_handles(sp_ps_win32_stdio_t* io) {
   }
 }
 
-void sp_ps_win32_close_parent_fds(sp_ps_win32_stdio_t* io) {
+void sp_ps_win32_close_parent(sp_ps_win32_stdio_t* io) {
   sp_sys_fd_t fds[3] = { io->in.parent_fd, io->out.parent_fd, io->err.parent_fd };
   sp_for(i, 3) {
     if (fds[i] != SP_SYS_INVALID_FD) {
       CloseHandle((HANDLE)fds[i]);
+    }
+  }
+
+  sp_win32_handle_t events[2] = { io->out.event, io->err.event };
+  sp_for(i, 2) {
+    if (events[i]) {
+      CloseHandle(events[i]);
+    }
+  }
+}
+
+SP_PRIVATE void sp_ps_win32_close_events(sp_ps_os_t* os) {
+  sp_win32_overlapped_t* streams[2] = { &os->out, &os->err };
+  sp_for(i, 2) {
+    if (streams[i]->hEvent) {
+      CloseHandle(streams[i]->hEvent);
+      streams[i]->hEvent = SP_NULLPTR;
     }
   }
 }
@@ -12306,7 +15643,7 @@ sp_ps_t sp_ps_create(sp_mem_t mem, sp_ps_config_t config) {
 
   if (!created) {
     sp_ps_win32_close_child_handles(&io);
-    sp_ps_win32_close_parent_fds(&io);
+    sp_ps_win32_close_parent(&io);
     return sp_zero_s(sp_ps_t);
   }
 
@@ -12314,23 +15651,19 @@ sp_ps_t sp_ps_create(sp_mem_t mem, sp_ps_config_t config) {
   CloseHandle(process_info.hThread);
   proc.os = sp_alloc_type(mem, sp_ps_os_t);
   proc.os->pid = process_info.hProcess;
+  proc.os->out = (sp_win32_overlapped_t) { .hEvent = io.out.event };
+  proc.os->err = (sp_win32_overlapped_t) { .hEvent = io.err.event };
 
-  if (io.in.parent_fd != SP_SYS_INVALID_FD) {
-    proc.io.in.fd = io.in.parent_fd;
-  }
-  if (io.out.parent_fd != SP_SYS_INVALID_FD) {
-    proc.io.out.fd = io.out.parent_fd;
-  }
-  if (io.err.parent_fd != SP_SYS_INVALID_FD) {
-    proc.io.err.fd = io.err.parent_fd;
-  }
+  proc.io.in.fd = io.in.parent_fd;
+  proc.io.out.fd = io.out.parent_fd;
+  proc.io.err.fd = io.err.parent_fd;
 
   return proc;
 
 fail:
   sp_mem_end_scratch(scratch);
   sp_ps_win32_close_child_handles(&io);
-  sp_ps_win32_close_parent_fds(&io);
+  sp_ps_win32_close_parent(&io);
   return sp_zero_s(sp_ps_t);
 }
 
@@ -12339,7 +15672,11 @@ sp_ps_output_t sp_ps_run(sp_mem_t mem, sp_ps_config_t config) {
     .mode = SP_PS_IO_MODE_CREATE,
   };
   sp_ps_t ps = sp_ps_create(mem, config);
-  if (ps.os) return sp_ps_output(&ps);
+  if (ps.os) {
+    sp_ps_output_t output = sp_ps_output(&ps);
+    sp_ps_free(&ps);
+    return output;
+  }
   return (sp_ps_output_t) { .status = { .state = SP_PS_STATE_DONE, .exit_code = -1 } };
 }
 
@@ -12349,15 +15686,88 @@ sp_io_stream_writer_t* sp_ps_io_in(sp_ps_t* ps) {
 
   sp_io_stream_writer_t* writer = sp_alloc_type(ps->mem, sp_io_stream_writer_t);
   sp_io_stream_writer_from_fd(writer, ps->io.in.fd, sp_ps_io_close_mode(ps->io.in.mode));
+  if (sp_ps_io_close_mode(ps->io.in.mode) == SP_IO_CLOSE_MODE_AUTO) {
+    ps->io.in.fd = SP_SYS_INVALID_FD;
+  }
   return writer;
+}
+
+SP_PRIVATE sp_err_t sp_ps_win32_reap(sp_sys_fd_t fd, sp_win32_overlapped_t* ov, u64* bytes_read) {
+  DWORD n = 0;
+  if (!GetOverlappedResult((sp_win32_handle_t)fd, ov, &n, true)) {
+    DWORD win32 = GetLastError();
+    // EOF is (SP_OK, 0), matching sp_sys_read
+    if (win32 == ERROR_BROKEN_PIPE) return SP_OK;
+    return sp_sys_err_from_win32(win32);
+  }
+  *bytes_read = (u64)n;
+  return SP_OK;
+}
+
+SP_PRIVATE sp_err_t sp_ps_win32_ov_read(sp_sys_fd_t fd, sp_win32_overlapped_t* ov, void* ptr, u32 count, u64* bytes_read) {
+  *ov = (sp_win32_overlapped_t) { .hEvent = ov->hEvent };
+  if (!ReadFile((sp_win32_handle_t)fd, ptr, count, SP_NULLPTR, ov)) {
+    DWORD win32 = GetLastError();
+    if (win32 == ERROR_BROKEN_PIPE) return SP_OK;
+    if (win32 != ERROR_IO_PENDING) return sp_sys_err_from_win32(win32);
+  }
+  // Every read issued here is reaped before returning; no operation outlives the call
+  return sp_ps_win32_reap(fd, ov, bytes_read);
+}
+
+// The parent read ends are overlapped, so sp_sys_read is off limits; the ps
+// BLOCKING/NONBLOCKING config is implemented here instead of in the handle mode
+typedef struct {
+  sp_io_reader_t base;
+  sp_sys_fd_t fd;
+  sp_win32_overlapped_t* ov;
+  sp_ps_io_blocking_t block;
+} sp_ps_win32_reader_t;
+
+SP_PRIVATE sp_err_t sp_ps_win32_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
+  sp_ps_win32_reader_t* r = (sp_ps_win32_reader_t*)reader;
+  if (bytes_read) *bytes_read = 0;
+
+  u64 n = 0;
+  sp_err_t err = SP_OK;
+  DWORD count = sp_sys_win32_io_count(size);
+
+  switch (r->block) {
+    case SP_PS_IO_BLOCKING: {
+      err = sp_ps_win32_ov_read(r->fd, r->ov, ptr, count, &n);
+      break;
+    }
+    case SP_PS_IO_NONBLOCKING: {
+      DWORD available = 0;
+      if (!PeekNamedPipe((sp_win32_handle_t)r->fd, SP_NULLPTR, 0, SP_NULLPTR, &available, SP_NULLPTR)) {
+        DWORD win32 = GetLastError();
+        if (win32 == ERROR_BROKEN_PIPE) return SP_OK;
+        return sp_sys_err_from_win32(win32);
+      }
+      if (!available) return SP_ERR_SYS_WOULD_BLOCK;
+
+      // ps is the only reader of this pipe, so the peeked bytes cannot vanish
+      // and the read completes inline
+      err = sp_ps_win32_ov_read(r->fd, r->ov, ptr, sp_min(count, available), &n);
+      break;
+    }
+  }
+
+  if (bytes_read) *bytes_read = n;
+  return err;
 }
 
 sp_io_reader_t* sp_ps_io_out(sp_ps_t* ps) {
   if (!ps) return SP_NULLPTR;
   if (!sp_ps_is_fd_valid(ps->io.out.fd)) return SP_NULLPTR;
 
-  sp_io_stream_reader_t* reader = sp_alloc_type(ps->mem, sp_io_stream_reader_t);
-  sp_io_stream_reader_from_fd(reader, ps->io.out.fd, sp_ps_io_close_mode(ps->io.out.mode));
+  sp_ps_win32_reader_t* reader = sp_alloc_type(ps->mem, sp_ps_win32_reader_t);
+  *reader = (sp_ps_win32_reader_t) {
+    .base = { .read = sp_ps_win32_reader_read },
+    .fd = ps->io.out.fd,
+    .ov = &ps->os->out,
+    .block = ps->io.out.block,
+  };
   return &reader->base;
 }
 
@@ -12365,8 +15775,13 @@ sp_io_reader_t* sp_ps_io_err(sp_ps_t* ps) {
   if (!ps) return SP_NULLPTR;
   if (!sp_ps_is_fd_valid(ps->io.err.fd)) return SP_NULLPTR;
 
-  sp_io_stream_reader_t* reader = sp_alloc_type(ps->mem, sp_io_stream_reader_t);
-  sp_io_stream_reader_from_fd(reader, ps->io.err.fd, sp_ps_io_close_mode(ps->io.err.mode));
+  sp_ps_win32_reader_t* reader = sp_alloc_type(ps->mem, sp_ps_win32_reader_t);
+  *reader = (sp_ps_win32_reader_t) {
+    .base = { .read = sp_ps_win32_reader_read },
+    .fd = ps->io.err.fd,
+    .ov = &ps->os->err,
+    .block = ps->io.err.block,
+  };
   return &reader->base;
 }
 
@@ -12431,82 +15846,116 @@ sp_ps_status_t sp_ps_wait(sp_ps_t* ps) {
   return sp_ps_win32_finish_process(ps);
 }
 
-u64 sp_ps_win32_read_available(sp_sys_fd_t fd, sp_io_writer_t* builder, bool* open) {
-  sp_win32_handle_t handle = sp_ps_win32_fd_to_handle(fd);
-  if (!handle) {
-    *open = false;
-    return 0;
-  }
-
+typedef struct {
+  sp_sys_fd_t fd;
+  sp_win32_overlapped_t* ov;
+  sp_io_writer_t* writer;
+  bool open;
+  bool pending;
   u8 buffer[4096];
-  u64 total = 0;
-
-  while (true) {
-    DWORD available = 0;
-    if (!PeekNamedPipe(handle, SP_NULLPTR, 0, SP_NULLPTR, &available, SP_NULLPTR)) {
-      if (GetLastError() == ERROR_BROKEN_PIPE) {
-        *open = false;
-      }
-      return total;
-    }
-
-    if (available == 0) {
-      return total;
-    }
-
-    u32 chunk = sp_min((u32)sizeof(buffer), (u32)available);
-    s64 num_read = sp_sys_read(fd, buffer, chunk);
-    if (num_read <= 0) {
-      *open = false;
-      return total;
-    }
-
-    sp_io_write_str(builder, sp_str((c8*)buffer, (u32)num_read), SP_NULLPTR);
-    total += (u64)num_read;
-  }
-}
+} sp_ps_win32_pump_stream_t;
 
 sp_ps_output_t sp_ps_output(sp_ps_t* ps) {
   sp_ps_output_t result = sp_zero;
 
-  bool out_open = sp_ps_is_fd_valid(ps->io.out.fd);
-  bool err_open = sp_ps_is_fd_valid(ps->io.err.fd);
+  sp_ps_close_owned_fd(&ps->io.in.fd, ps->io.in.mode);
 
   sp_io_dyn_mem_writer_t out = sp_zero;
   sp_io_dyn_mem_writer_t err = sp_zero;
   sp_io_dyn_mem_writer_init(ps->mem, &out);
   sp_io_dyn_mem_writer_init(ps->mem, &err);
 
-  DWORD exit_code = 0;
-  bool process_done = !ps->os;
+  sp_ps_win32_pump_stream_t streams [2] = {
+    { .fd = ps->io.out.fd, .ov = &ps->os->out, .writer = &out.base, .open = sp_ps_is_fd_valid(ps->io.out.fd) },
+    { .fd = ps->io.err.fd, .ov = &ps->os->err, .writer = &err.base, .open = sp_ps_is_fd_valid(ps->io.err.fd) },
+  };
 
-  while (!process_done || out_open || err_open) {
-    bool read_any = false;
+  DWORD exit_code = (DWORD)-1;
+  bool process_done = !ps->os->pid;
 
-    if (out_open) {
-      read_any |= sp_ps_win32_read_available(ps->io.out.fd, &out.base, &out_open) > 0;
-    }
-    if (err_open) {
-      read_any |= sp_ps_win32_read_available(ps->io.err.fd, &err.base, &err_open) > 0;
-    }
+  while (true) {
+    sp_carr_for(streams, it) {
+      sp_ps_win32_pump_stream_t* s = &streams[it];
+      if (!s->open || s->pending) continue;
 
-    if (!process_done && ps->os->pid) {
-      DWORD wait = WaitForSingleObject(ps->os->pid, read_any ? 0 : 10);
-      if (wait == WAIT_OBJECT_0) {
-        process_done = true;
-        if (!GetExitCodeProcess(ps->os->pid, &exit_code)) {
-          exit_code = (DWORD)-1;
+      *s->ov = (sp_win32_overlapped_t) { .hEvent = s->ov->hEvent };
+      if (!ReadFile((sp_win32_handle_t)s->fd, s->buffer, sizeof(s->buffer), SP_NULLPTR, s->ov)) {
+        DWORD win32 = GetLastError();
+        if (win32 != ERROR_IO_PENDING) {
+          s->open = false;
+          if (win32 != ERROR_BROKEN_PIPE && result.error == SP_OK) result.error = sp_sys_err_from_win32(win32);
+          continue;
         }
-      } else if (wait == WAIT_FAILED) {
-        process_done = true;
+      }
+      s->pending = true;
+    }
+
+    sp_win32_handle_t handles [3];
+    sp_ps_win32_pump_stream_t* sources [3];
+    DWORD num_handles = 0;
+    sp_carr_for(streams, it) {
+      if (!streams[it].pending) continue;
+      handles[num_handles] = streams[it].ov->hEvent;
+      sources[num_handles] = &streams[it];
+      num_handles++;
+    }
+    if (!process_done) {
+      handles[num_handles] = ps->os->pid;
+      sources[num_handles] = SP_NULLPTR;
+      num_handles++;
+    }
+
+    if (!num_handles) break;
+
+    DWORD wait = WaitForMultipleObjects(num_handles, handles, false, INFINITE);
+    if (wait == WAIT_FAILED) {
+      if (process_done) break;
+      process_done = true;
+      continue;
+    }
+
+    sp_ps_win32_pump_stream_t* s = sources[wait - WAIT_OBJECT_0];
+    if (!s) {
+      // The child can exit with pipe data still buffered; keep draining until
+      // both streams break
+      process_done = true;
+      if (!GetExitCodeProcess(ps->os->pid, &exit_code)) {
         exit_code = (DWORD)-1;
       }
+      continue;
     }
 
-    if (!read_any && process_done && !out_open && !err_open) {
-      break;
+    s->pending = false;
+    u64 num_read = 0;
+    sp_err_t reap = sp_ps_win32_reap(s->fd, s->ov, &num_read);
+    if (reap != SP_OK) {
+      s->open = false;
+      if (result.error == SP_OK) result.error = reap;
+      continue;
     }
+    if (!num_read) {
+      s->open = false;
+      continue;
+    }
+    sp_io_write_str(s->writer, sp_str((c8*)s->buffer, (u32)num_read), SP_NULLPTR);
   }
+
+  // The kernel writes the OVERLAPPED even for a cancelled read; a read left
+  // pending here would complete into a dead stack buffer
+  sp_carr_for(streams, it) {
+    sp_ps_win32_pump_stream_t* s = &streams[it];
+    if (!s->pending) continue;
+    CancelIoEx((sp_win32_handle_t)s->fd, s->ov);
+    u64 num_read = 0;
+    if (sp_ps_win32_reap(s->fd, s->ov, &num_read) == SP_OK && num_read) {
+      sp_io_write_str(s->writer, sp_str((c8*)s->buffer, (u32)num_read), SP_NULLPTR);
+    }
+    s->pending = false;
+  }
+
+  sp_ps_close_owned_fd(&ps->io.out.fd, ps->io.out.mode);
+  sp_ps_close_owned_fd(&ps->io.err.fd, ps->io.err.mode);
+  sp_ps_win32_close_events(ps->os);
 
   if (ps->os->pid) {
     CloseHandle(ps->os->pid);
@@ -12517,7 +15966,7 @@ sp_ps_output_t sp_ps_output(sp_ps_t* ps) {
   result.err = sp_io_dyn_mem_writer_take_str(&err);
   result.status = (sp_ps_status_t) {
     .state = SP_PS_STATE_DONE,
-    .exit_code = process_done ? (s32)exit_code : -1,
+    .exit_code = (s32)exit_code,
   };
   return result;
 }
@@ -12538,7 +15987,14 @@ bool sp_ps_kill(sp_ps_t* ps) {
 }
 
 void sp_ps_free(sp_ps_t* ps) {
-  if (!ps || !ps->os) return;
+  if (!ps) return;
+
+  sp_ps_close_owned_fd(&ps->io.in.fd, ps->io.in.mode);
+  sp_ps_close_owned_fd(&ps->io.out.fd, ps->io.out.mode);
+  sp_ps_close_owned_fd(&ps->io.err.fd, ps->io.err.mode);
+
+  if (!ps->os) return;
+  sp_ps_win32_close_events(ps->os);
   if (ps->os->pid) {
     CloseHandle(ps->os->pid);
     ps->os->pid = SP_NULLPTR;
@@ -12828,24 +16284,24 @@ void sp_fmon_os_add_dir(sp_fmon_t* monitor, sp_str_t path) {
   sp_win32_handle_t event = CreateEventW(NULL, false, false, NULL);
   if (!event) return;
 
-  sp_win32_handle_t handle = sp_sys_nt_open(
+  sp_sys_fd_t handle = SP_SYS_INVALID_FD;
+  if (!SP_NT_SUCCESS(sp_sys_nt_open(
     sp_sys_get_root(0),
     path,
     FILE_LIST_DIRECTORY,
     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
     SP_NT_FILE_OPEN,
     SP_NT_FILE_DIRECTORY_FILE | SP_NT_FILE_OPEN_FOR_BACKUP_INTENT,
-    0
-  );
-
-  if (handle == INVALID_HANDLE_VALUE) {
+    0,
+    &handle
+  ))) {
     CloseHandle(event);
     return;
   }
 
   sp_fmon_dir_t dir = sp_zero;
   dir.overlapped.hEvent = event;
-  dir.handle = handle;
+  dir.handle = (sp_win32_handle_t)handle;
   dir.path = sp_fs_canonicalize_path(monitor->mem, path);
   dir.notify_information = sp_alloc(monitor->mem, SP_FILE_MONITOR_BUFFER_SIZE);
   sp_mem_zero(dir.notify_information, SP_FILE_MONITOR_BUFFER_SIZE);
@@ -12989,7 +16445,7 @@ void sp_fmon_os_init(sp_fmon_t* monitor) {
   sp_fmon_os_t* linux_monitor = sp_alloc_type(monitor->mem, sp_fmon_os_t);
 
   linux_monitor->fd = sp_syscall_notify_init1(SP_IN_NONBLOCK | SP_IN_CLOEXEC);
-  if (linux_monitor->fd == -1) {
+  if (linux_monitor->fd < 0) {
     // Handle error but don't crash
     linux_monitor->fd = 0;
   }
@@ -13023,7 +16479,7 @@ void sp_fmon_os_add_dir(sp_fmon_t* monitor, sp_str_t path) {
 
   s32 wd = sp_syscall_inotify_add_watch(os->fd, path_cstr, mask);
 
-  if (wd != -1) {
+  if (wd >= 0) {
     sp_da_push(os->fds, wd);
     sp_da_push(os->paths, sp_str_copy(monitor->mem, path));
   }
@@ -13061,8 +16517,8 @@ void sp_fmon_os_process_changes(sp_fmon_t* monitor) {
   sp_fmon_os_t* os = (sp_fmon_os_t*)monitor->os;
   if (os->fd <= 0) return;
 
-  s64 len = sp_sys_read(os->fd, os->buffer, sizeof(os->buffer));
-  if (len <= 0) return;
+  u64 len = 0;
+  if (sp_sys_read(os->fd, os->buffer, sizeof(os->buffer), &len) != SP_OK || !len) return;
 
   u8* buffer = (u8*)os->buffer;
   u8* ptr = buffer;
@@ -13254,7 +16710,7 @@ void sp_fmon_os_init(sp_fmon_t* monitor) {
   sp_fmon_os_t* os = sp_alloc_type(monitor->mem, sp_fmon_os_t);
   os->queue = dispatch_queue_create("sp.fmon", DISPATCH_QUEUE_SERIAL);
   os->monitor = monitor;
-  sp_mutex_init(&os->mutex, SP_MUTEX_PLAIN);
+  sp_mutex_init(&os->mutex);
   os->watch_arena = sp_mem_arena_new_ex(monitor->mem, SP_FMON_ARENA_SIZE, SP_MEM_ALIGNMENT);
   os->event_arena = sp_mem_arena_new_ex(monitor->mem, SP_FMON_ARENA_SIZE, SP_MEM_ALIGNMENT);
   os->mem.watch = sp_mem_arena_as_allocator(os->watch_arena);
@@ -13526,39 +16982,16 @@ void sp_fmon_os_process_changes(sp_fmon_t* monitor) {
 // @io
 sp_err_t sp_io_file_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
   sp_io_file_reader_t* r = (sp_io_file_reader_t*)reader;
-  s64 rc = sp_sys_pread(r->file, ptr, size, r->pos);
-  u64 num_bytes = rc < 0 ? 0 : (u64)rc;
-
-  sp_err_t result = SP_OK;
-  if (rc < 0) {
-    result = SP_ERR_IO_READ_FAILED;
-  }
-  else if (size && !num_bytes) {
-    result = SP_ERR_IO_EOF;
-  }
-  else {
-    r->pos += num_bytes;
-  }
-
+  u64 num_bytes = 0;
+  sp_err_t err = sp_sys_pread(r->file, ptr, size, r->pos, &num_bytes);
+  r->pos += num_bytes;
   if (bytes_read) *bytes_read = num_bytes;
-  return result;
+  return err;
 }
 
 sp_err_t sp_io_stream_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
   sp_io_stream_reader_t* pr = (sp_io_stream_reader_t*)reader;
-  s64 rc = sp_sys_read(pr->fd, ptr, size);
-  u64 num_bytes = rc < 0 ? 0 : (u64)rc;
-
-  sp_err_t result = SP_OK;
-  if (rc < 0) {
-    result = SP_ERR_IO_READ_FAILED;
-  }
-  else if (size && !num_bytes) {
-    result = SP_ERR_IO_EOF;
-  }
-
-  if (bytes_read) *bytes_read = num_bytes;
-  return result;
+  return sp_sys_read(pr->fd, ptr, size, bytes_read);
 }
 
 sp_err_t sp_io_eof_read(sp_io_reader_t* r, void* ptr, u64 size, u64* bytes_read) {
@@ -13567,37 +17000,49 @@ sp_err_t sp_io_eof_read(sp_io_reader_t* r, void* ptr, u64 size, u64* bytes_read)
   return SP_ERR_IO_EOF;
 }
 
-sp_err_t sp_io_file_reader_as_fd(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos) {
+sp_err_t sp_io_file_reader_as_file(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos) {
   sp_io_file_reader_t* fr = (sp_io_file_reader_t*)r;
-  if (fr->file == SP_SYS_INVALID_FD) return SP_ERR_IO;
+  if (fr->file == SP_SYS_INVALID_FD) return SP_ERR_SYS_BAD_FD;
   if (fd) *fd = fr->file;
   if (pos) *pos = &fr->pos;
   return SP_OK;
 }
 
+sp_err_t sp_io_file_reader_discard(sp_io_reader_t* reader, u64 n, u64* discarded) {
+  sp_io_file_reader_t* r = (sp_io_file_reader_t*)reader;
+  u64 remaining = r->pos < r->size ? r->size - r->pos : 0;
+  u64 skip = sp_min(n, remaining);
+  r->pos += skip;
+  if (discarded) *discarded = skip;
+  return skip == n ? SP_OK : SP_ERR_IO_EOF;
+}
+
 sp_err_t sp_io_file_reader_from_file(sp_io_file_reader_t* r, sp_sys_fd_t file, sp_io_close_mode_t mode) {
   *r = (sp_io_file_reader_t) {
     .base = {
-      .read  = sp_io_file_reader_read,
-      .as_fd = sp_io_file_reader_as_fd,
+      .read    = sp_io_file_reader_read,
+      .as_file = sp_io_file_reader_as_file,
+      .discard = sp_io_file_reader_discard,
     },
     .file = file,
     .close_mode = mode,
   };
 
-  if (sp_io_file_reader_size_force(r, SP_NULLPTR) != SP_OK) {
+  sp_err_t err = sp_io_file_reader_size_force(r, SP_NULLPTR);
+  if (err) {
     if (mode == SP_IO_CLOSE_MODE_AUTO) sp_sys_close(file);
     *r = sp_zero_s(sp_io_file_reader_t);
-    return SP_ERR_IO;
+    return err;
   }
   return SP_OK;
 }
 
 sp_err_t sp_io_file_reader_from_path(sp_io_file_reader_t* r, sp_str_t path) {
-  sp_sys_fd_t fd = sp_sys_open_s(sp_sys_get_root(0), path, SP_O_RDONLY | SP_O_BINARY, 0);
-  if (fd == SP_SYS_INVALID_FD) {
+  sp_sys_fd_t fd = SP_SYS_INVALID_FD;
+  sp_err_t err = sp_sys_open_s(sp_sys_get_root(0), path, SP_SYS_OPEN_MODE_RO, 0, &fd);
+  if (err) {
     *r = sp_zero_s(sp_io_file_reader_t);
-    return SP_ERR_IO_OPEN_FAILED;
+    return err;
   }
   return sp_io_file_reader_from_file(r, fd, SP_IO_CLOSE_MODE_AUTO);
 }
@@ -13641,9 +17086,10 @@ sp_err_t sp_io_file_reader_size(sp_io_file_reader_t* r, u64* size) {
 
 sp_err_t sp_io_file_reader_size_force(sp_io_file_reader_t* r, u64* size) {
   sp_sys_file_meta_t st = sp_zero;
-  if (sp_sys_get_file_metadata(r->file, &st) < 0) {
+  sp_err_t err = sp_sys_get_file_metadata(r->file, &st);
+  if (err) {
     if (size) *size = 0;
-    return SP_ERR_IO;
+    return err;
   }
   r->size = (u64)st.size;
   if (size) *size = r->size;
@@ -13652,16 +17098,14 @@ sp_err_t sp_io_file_reader_size_force(sp_io_file_reader_t* r, u64* size) {
 
 sp_err_t sp_io_file_reader_close(sp_io_file_reader_t* r) {
   if (r->close_mode == SP_IO_CLOSE_MODE_AUTO) {
-    if (sp_sys_close(r->file) < 0) {
-      return SP_ERR_IO_CLOSE_FAILED;
-    }
+    return sp_sys_close(r->file);
   }
   return SP_OK;
 }
 
-sp_err_t sp_io_stream_reader_as_fd(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos) {
+sp_err_t sp_io_stream_reader_as_file(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos) {
   sp_io_stream_reader_t* pr = (sp_io_stream_reader_t*)r;
-  if (pr->fd == SP_SYS_INVALID_FD) return SP_ERR_IO;
+  if (pr->fd == SP_SYS_INVALID_FD) return SP_ERR_SYS_BAD_FD;
   if (fd) *fd = pr->fd;
   if (pos) *pos = SP_NULLPTR;
   return SP_OK;
@@ -13670,92 +17114,46 @@ sp_err_t sp_io_stream_reader_as_fd(sp_io_reader_t* r, sp_sys_fd_t* fd, u64** pos
 void sp_io_stream_reader_from_fd(sp_io_stream_reader_t* r, sp_sys_fd_t fd, sp_io_close_mode_t mode) {
   *r = (sp_io_stream_reader_t) {
     .base = {
-      .read  = sp_io_stream_reader_read,
-      .as_fd = sp_io_stream_reader_as_fd,
+      .read = sp_io_stream_reader_read,
     },
     .fd = fd,
     .close_mode = mode,
   };
 }
 
+void sp_io_stream_reader_from_file(sp_io_stream_reader_t* r, sp_sys_fd_t file, sp_io_close_mode_t mode) {
+  *r = (sp_io_stream_reader_t) {
+    .base = {
+      .read    = sp_io_stream_reader_read,
+      .as_file = sp_io_stream_reader_as_file,
+    },
+    .fd = file,
+    .close_mode = mode,
+  };
+}
+
 sp_err_t sp_io_stream_reader_close(sp_io_stream_reader_t* r) {
   if (r->close_mode == SP_IO_CLOSE_MODE_AUTO) {
-    if (sp_sys_close(r->fd) < 0) {
-      return SP_ERR_IO_CLOSE_FAILED;
-    }
+    return sp_sys_close(r->fd);
   }
   return SP_OK;
 }
 
 sp_err_t sp_io_stream_writer_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written) {
   sp_io_stream_writer_t* w = (sp_io_stream_writer_t*)writer;
-  s64 rc = sp_sys_write(w->fd, ptr, size);
-  u64 num_bytes = rc < 0 ? 0 : (u64)rc;
-
-  sp_err_t result = SP_OK;
-  if (rc < 0) {
-    result = SP_ERR_IO_WRITE_FAILED;
-  }
-  else if (size && !num_bytes) {
-    result = SP_ERR_IO_EOF;
-  }
-
-  if (bytes_written) *bytes_written = num_bytes;
-  return result;
+  return sp_sys_write(w->fd, ptr, size, bytes_written);
 }
 
-#if defined(SP_LINUX)
-sp_err_t sp_io_stream_writer_read_from(sp_io_writer_t* writer, sp_io_reader_t* r, u64* bytes_moved) {
+sp_err_t sp_io_stream_writer_transfer(sp_io_writer_t* writer, sp_sys_fd_t fd, u64* pos, u64 count, u64* bytes_moved) {
   sp_io_stream_writer_t* w = (sp_io_stream_writer_t*)writer;
-  u64 total = 0;
-
-  if (!r->as_fd) { if (bytes_moved) *bytes_moved = 0; return SP_ERR_IO_UNIMPLEMENTED; }
-
-  sp_sys_fd_t in_fd = SP_SYS_INVALID_FD;
-  u64* in_pos = SP_NULLPTR;
-  if (r->as_fd(r, &in_fd, &in_pos) != SP_OK) {
-    if (bytes_moved) *bytes_moved = 0;
-    return SP_ERR_IO_UNIMPLEMENTED;
-  }
-  if (!in_pos) {
-    if (bytes_moved) *bytes_moved = 0;
-    return SP_ERR_IO_UNIMPLEMENTED;
-  }
-
-  const u64 chunk = (u64)1 << 30;
-
-  while (true) {
-    s64 off = (s64)*in_pos;
-    s64 rc;
-    do {
-      rc = sp_syscall(SP_SYSCALL_NUM_SENDFILE, w->fd, in_fd, &off, chunk);
-    } while (rc == -1 && errno == SP_EINTR);
-
-    if (rc < 0) {
-      if (total == 0) {
-        if (bytes_moved) *bytes_moved = 0;
-        return SP_ERR_IO_UNIMPLEMENTED;
-      }
-      if (bytes_moved) *bytes_moved = total;
-      return SP_ERR_IO_WRITE_FAILED;
-    }
-    if (rc == 0) break;
-    *in_pos = (u64)off;
-    total += (u64)rc;
-  }
-
-  if (bytes_moved) *bytes_moved = total;
-  return SP_OK;
+  return sp_sys_transfer(fd, pos, w->fd, count, bytes_moved);
 }
-#endif
 
 void sp_io_stream_writer_from_fd(sp_io_stream_writer_t* w, sp_sys_fd_t fd, sp_io_close_mode_t mode) {
   *w = (sp_io_stream_writer_t) {
     .base = {
-      .write = sp_io_stream_writer_write,
-#if defined(SP_LINUX)
-      .read_from = sp_io_stream_writer_read_from,
-#endif
+      .write    = sp_io_stream_writer_write,
+      .transfer = sp_io_stream_writer_transfer,
     },
     .fd = fd,
     .close_mode = mode,
@@ -13765,8 +17163,7 @@ void sp_io_stream_writer_from_fd(sp_io_stream_writer_t* w, sp_sys_fd_t fd, sp_io
 sp_err_t sp_io_stream_writer_close(sp_io_stream_writer_t* w) {
   sp_io_flush(&w->base);
   if (w->close_mode != SP_IO_CLOSE_MODE_AUTO) return SP_OK;
-  if (sp_sys_close(w->fd) < 0) return SP_ERR_IO_CLOSE_FAILED;
-  return SP_OK;
+  return sp_sys_close(w->fd);
 }
 
 void sp_io_reader_from_mem(sp_io_reader_t* reader, const void* ptr, u64 size) {
@@ -13792,14 +17189,240 @@ void sp_io_reader_set_buffer(sp_io_reader_t* reader, u8* buf, u64 capacity) {
   reader->cursor = 0;
 }
 
+////////////////
+// IO: SOCKET //
+////////////////
+SP_PRIVATE u64 sp_io_socket_now_ms(void) {
+  sp_sys_timespec_t ts = sp_zero;
+  sp_sys_clock_gettime(SP_CLOCK_MONOTONIC, &ts);
+  return (u64)ts.tv_sec * 1000 + (u64)ts.tv_nsec / 1000000;
+}
+
+SP_PRIVATE u64 sp_io_socket_deadline(u32 timeout_ms) {
+  return timeout_ms ? sp_io_socket_now_ms() + timeout_ms : 0;
+}
+
+SP_PRIVATE bool sp_io_socket_remaining(u64 deadline, u32* remaining) {
+  *remaining = 0;
+  if (!deadline) return true;
+  u64 now = sp_io_socket_now_ms();
+  if (now >= deadline) return false;
+  *remaining = (u32)sp_min(deadline - now, (u64)SP_LIMIT_S32_MAX);
+  return true;
+}
+
+SP_PRIVATE sp_err_t sp_io_socket_wait_deadline(sp_sys_socket_t socket, bool readable, u64 deadline) {
+  while (true) {
+    u32 remaining = 0;
+    if (!sp_io_socket_remaining(deadline, &remaining)) return SP_ERR_SYS_TIMED_OUT;
+    sp_err_t err = sp_sys_socket_wait(socket, readable, remaining);
+    if (err != SP_ERR_SYS_TIMED_OUT) return err;
+  }
+}
+
+SP_PRIVATE sp_err_t sp_io_socket_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
+  sp_io_socket_reader_t* r = (sp_io_socket_reader_t*)reader;
+  if (bytes_read) *bytes_read = 0;
+  u64 deadline = sp_io_socket_deadline(r->timeout_ms);
+  while (true) {
+    u64 n = 0;
+    sp_err_t err = sp_sys_socket_recv(r->socket, ptr, size, &n);
+    if (err == SP_OK) {
+      if (bytes_read) *bytes_read = n;
+      return SP_OK;
+    }
+    if (err != SP_ERR_SYS_WOULD_BLOCK) return err;
+    sp_err_t wait = sp_io_socket_wait_deadline(r->socket, true, deadline);
+    if (wait == SP_ERR_SYS_TIMED_OUT) return SP_ERR_IO_TIMEOUT;
+    if (wait != SP_OK) return wait;
+  }
+}
+
+SP_PRIVATE sp_err_t sp_io_socket_writer_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written) {
+  sp_io_socket_writer_t* w = (sp_io_socket_writer_t*)writer;
+  if (bytes_written) *bytes_written = 0;
+  u64 deadline = sp_io_socket_deadline(w->timeout_ms);
+  while (true) {
+    u64 n = 0;
+    sp_err_t err = sp_sys_socket_send(w->socket, ptr, size, &n);
+    if (err == SP_OK) {
+      if (bytes_written) *bytes_written = n;
+      return SP_OK;
+    }
+    if (err != SP_ERR_SYS_WOULD_BLOCK) return err;
+    sp_err_t wait = sp_io_socket_wait_deadline(w->socket, false, deadline);
+    if (wait == SP_ERR_SYS_TIMED_OUT) return SP_ERR_IO_TIMEOUT;
+    if (wait != SP_OK) return wait;
+  }
+}
+
+void sp_io_socket_reader_init(sp_io_socket_reader_t* r, sp_sys_socket_t socket, u32 timeout_ms) {
+  *r = sp_zero_s(sp_io_socket_reader_t);
+  r->base.read = sp_io_socket_reader_read;
+  r->socket = socket;
+  r->timeout_ms = timeout_ms;
+  sp_sys_socket_set_nonblocking(socket);
+}
+
+void sp_io_socket_writer_init(sp_io_socket_writer_t* w, sp_sys_socket_t socket, u32 timeout_ms) {
+  *w = sp_zero_s(sp_io_socket_writer_t);
+  w->base.write = sp_io_socket_writer_write;
+  w->socket = socket;
+  w->timeout_ms = timeout_ms;
+  sp_sys_socket_set_nonblocking(socket);
+}
+
+///////////////
+// IO: LIMIT //
+///////////////
+SP_PRIVATE sp_err_t sp_io_limit_reader_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
+  sp_io_limit_reader_t* limit = (sp_io_limit_reader_t*)reader;
+  if (bytes_read) *bytes_read = 0;
+  if (!limit->remaining) return SP_ERR_IO_EOF;
+  u64 n = 0;
+  sp_err_t err = sp_io_read(limit->inner, ptr, sp_min(size, limit->remaining), &n);
+  limit->remaining -= n;
+  if (bytes_read) *bytes_read = n;
+  return err;
+}
+
+void sp_io_limit_reader_init(sp_io_limit_reader_t* r, sp_io_reader_t* inner, u64 limit) {
+  *r = sp_zero_s(sp_io_limit_reader_t);
+  r->base.read = sp_io_limit_reader_read;
+  r->inner = inner;
+  r->remaining = limit;
+}
+
+static sp_err_t sp_io_backend_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
+  u64 num_read = 0;
+  sp_err_t err = reader->read(reader, ptr, size, &num_read);
+  if (!err && size && !num_read) err = SP_ERR_IO_EOF;
+  *bytes_read = num_read;
+  return err;
+}
+
+static sp_err_t sp_io_backend_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written) {
+  u64 num_written = 0;
+  sp_err_t err = writer->write(writer, ptr, size, &num_written);
+  sp_assert(num_written || err || !size);
+  *bytes_written = num_written;
+  return err;
+}
+
+sp_err_t sp_io_fill(sp_io_reader_t* reader) {
+  sp_assert(reader && reader->buffer.data);
+  sp_assert(reader->cursor >= reader->buffer.len);
+  return sp_io_fill_more(reader);
+}
+
+sp_err_t sp_io_fill_more(sp_io_reader_t* reader) {
+  sp_assert(reader && reader->buffer.data);
+
+  u64 buffered = reader->buffer.len - reader->cursor;
+  if (buffered == reader->buffer.capacity) return SP_ERR_IO_NO_SPACE;
+
+  u64 num_read = 0;
+
+  if (!buffered) {
+    sp_err_t err = sp_io_backend_read(reader, reader->buffer.data, reader->buffer.capacity, &num_read);
+    if (num_read) {
+      reader->buffer.len = num_read;
+      reader->cursor = 0;
+    }
+    return err;
+  }
+
+  if (reader->cursor) {
+    sp_mem_move(reader->buffer.data, reader->buffer.data + reader->cursor, buffered);
+    reader->buffer.len = buffered;
+    reader->cursor = 0;
+  }
+
+  sp_err_t err = sp_io_backend_read(reader, reader->buffer.data + reader->buffer.len, reader->buffer.capacity - reader->buffer.len, &num_read);
+  reader->buffer.len += num_read;
+  return err;
+}
+
+sp_err_t sp_io_peek(sp_io_reader_t* reader, sp_str_t* out) {
+  sp_assert(reader && out && reader->buffer.data);
+
+  sp_err_t err = SP_OK;
+  if (reader->cursor >= reader->buffer.len) {
+    err = sp_io_fill(reader);
+    if (err == SP_ERR_IO_EOF && reader->buffer.len > reader->cursor) err = SP_OK;
+  }
+
+  *out = sp_str((const c8*)reader->buffer.data + reader->cursor, (u32)(reader->buffer.len - reader->cursor));
+  return err;
+}
+
+void sp_io_consume(sp_io_reader_t* reader, u64 n) {
+  sp_assert(reader);
+  sp_assert(reader->cursor + n <= reader->buffer.len);
+  reader->cursor += n;
+}
+
+sp_err_t sp_io_peek_until(sp_io_reader_t* reader, sp_str_t delim, sp_str_t* out) {
+  sp_assert(reader && out && reader->buffer.data);
+  sp_assert(delim.len > 0);
+
+  sp_err_t pending = SP_OK;
+  u64 searched = 0;
+
+  for (;;) {
+    sp_str_t avail = sp_str((const c8*)reader->buffer.data + reader->cursor, (u32)(reader->buffer.len - reader->cursor));
+
+    u64 from = searched >= delim.len ? searched - (delim.len - 1) : 0;
+    s32 p = (u64)avail.len > from ? sp_str_find(sp_str(avail.data + from, (u32)(avail.len - from)), delim) : SP_STR_NO_MATCH;
+    if (p != SP_STR_NO_MATCH) {
+      *out = sp_str(avail.data, (u32)from + (u32)p + delim.len);
+      return SP_OK;
+    }
+
+    if (pending != SP_OK) {
+      *out = avail;
+      return pending;
+    }
+
+    searched = avail.len;
+    pending = sp_io_fill_more(reader);
+  }
+}
+
+sp_err_t sp_io_discard(sp_io_reader_t* reader, u64 n, u64* discarded) {
+  sp_assert(reader);
+
+  u64 buffered = reader->buffer.len - reader->cursor;
+  u64 total = sp_min(n, buffered);
+  reader->cursor += total;
+
+  sp_err_t err = SP_OK;
+  while (total < n && err == SP_OK) {
+    u64 moved = 0;
+    if (reader->discard) {
+      err = reader->discard(reader, n - total, &moved);
+    }
+    else if (reader->buffer.data) {
+      err = sp_io_fill(reader);
+      moved = sp_min(n - total, reader->buffer.len - reader->cursor);
+      reader->cursor += moved;
+    }
+    else {
+      u8 scratch[4096];
+      err = sp_io_backend_read(reader, scratch, sp_min(n - total, (u64)sizeof(scratch)), &moved);
+    }
+    total += moved;
+  }
+
+  if (discarded) *discarded = total;
+  if (err == SP_ERR_IO_EOF && total == n) return SP_OK;
+  return err;
+}
+
 sp_err_t sp_io_copy(sp_io_writer_t* w, sp_io_reader_t* r, u64* bytes_copied) {
   u64 total = 0;
 
-  // Fast path: writer supports a kernel-side bulk transfer and reader can
-  // expose its fd. If the reader has userspace-buffered bytes, drain them
-  // through the normal write path first — the kernel doesn't know about
-  // them. If the writer has its own buffer, flush it for the same reason.
-  if (w->read_from && r->as_fd) {
+  if (w->transfer && r->as_file) {
     u64 buffered = r->buffer.len - r->cursor;
     if (buffered) {
       u64 wrote = 0;
@@ -13819,12 +17442,25 @@ sp_err_t sp_io_copy(sp_io_writer_t* w, sp_io_reader_t* r, u64* bytes_copied) {
       }
     }
 
-    u64 moved = 0;
-    sp_err_t err = w->read_from(w, r, &moved);
-    total += moved;
-    if (err != SP_ERR_IO_UNIMPLEMENTED) {
-      if (bytes_copied) *bytes_copied = total;
-      return err;
+    sp_sys_fd_t in_fd = SP_SYS_INVALID_FD;
+    u64* in_pos = SP_NULLPTR;
+    if (r->as_file(r, &in_fd, &in_pos) == SP_OK) {
+      u64 moved_total = 0;
+      while (true) {
+        u64 moved = 0;
+        sp_err_t err = w->transfer(w, in_fd, in_pos, (u64)1 << 30, &moved);
+        moved_total += moved;
+        total += moved;
+        if (bytes_copied) *bytes_copied = total;
+        if (err == SP_ERR_SYS_UNSUPPORTED) break;
+        if (err) return err;
+        // This is either an empty source or copy_file_range silent zero
+        // on weird filesystems. This isn't the best code...
+        if (!moved) {
+          if (moved_total) return SP_OK;
+          break;
+        }
+      }
     }
     // The fast path declined this pair. Fall through to the generic loop.
   }
@@ -13838,33 +17474,34 @@ sp_err_t sp_io_copy(sp_io_writer_t* w, sp_io_reader_t* r, u64* bytes_copied) {
 }
 
 sp_err_t sp_io_copy_b(sp_io_writer_t* w, sp_io_reader_t* r, u8* buffer, u64 n, u64* bytes_copied) {
-  sp_err_t err = SP_OK;
+  struct { sp_err_t r; sp_err_t w; sp_err_t rc; } err = sp_zero;
   u64 total = 0;
-
   while (true) {
-    // (bytes, error) is orthogonal on both sides. A read that produces bytes
-    // alongside an error must still have those bytes committed to the
-    // destination before we surface the error. A write that accepts a prefix
-    // before failing must have that prefix counted toward bytes_copied. The
-    // first error encountered wins; bytes_copied accurately reports what
-    // actually moved through.
     u64 chunk = 0;
-    sp_err_t rerr = sp_io_read(r, buffer, n, &chunk);
+    err.r = sp_io_read(r, buffer, n, &chunk);
 
     if (chunk) {
       u64 wrote = 0;
-      sp_err_t werr = sp_io_write_all(w, buffer, chunk, &wrote);
+      err.w = sp_io_write_all(w, buffer, chunk, &wrote);
+
+      // An error doesn't change the fact that the bytes were actually written
       total += wrote;
-      if (werr) { err = werr; goto done; }
+      if (err.w) {
+        err.rc = err.w;
+        goto done;
+      }
     }
 
-    if (rerr) { err = rerr; goto done; }
+    if (err.r) {
+      err.rc = err.r;
+      goto done;
+    }
   }
 
 done:
-  if (err == SP_ERR_IO_EOF) err = SP_OK;
+  if (err.rc == SP_ERR_IO_EOF) err.rc = SP_OK;
   if (bytes_copied) *bytes_copied = total;
-  return err;
+  return err.rc;
 }
 
 sp_err_t sp_io_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
@@ -13876,40 +17513,53 @@ sp_err_t sp_io_read(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read
   }
 
   if (!reader->buffer.data) {
-    return reader->read(reader, ptr, size, bytes_read);
+    u64 num_read = 0;
+    sp_err_t err = sp_io_backend_read(reader, ptr, size, &num_read);
+    if (bytes_read) *bytes_read = num_read;
+    return err;
   }
 
   sp_err_t err = SP_OK;
   u8* buffer = (u8*)ptr;
-  u64 num_drained = 0;
   u64 num_read = 0;
 
-  // Drain what we can from what's already buffered
-  num_drained = sp_min(size, reader->buffer.len - reader->cursor);
-  sp_mem_copy(buffer, reader->buffer.data + reader->cursor, num_drained);
-  reader->cursor += num_drained;
+  // If we don't have enough buffered data, do a short read instead of going
+  // to the backend for the rest. Short reads are always OK, and going to the
+  // backend could block.
+  bool drained = reader->cursor >= reader->buffer.len;
 
-  // Issue a call to the backend for the rest
-  u64 remaining = size - num_drained;
-
-  if (remaining >= reader->buffer.capacity) {
+  if (drained && size >= reader->buffer.capacity) {
     // If the request is too large to buffer, just read it directly
-    err = reader->read(reader, buffer + num_drained, remaining, &num_read);
+    err = sp_io_backend_read(reader, buffer, size, &num_read);
   }
-  else if (remaining) {
-    // If the request is bufferable, do so by completely filling the buffer and then draining
-    // just what the user asked for
-    err = reader->read(reader, reader->buffer.data, reader->buffer.capacity, &reader->buffer.len);
+  else {
+    // If the request is bufferable, do so by completely filling the buffer
+    // and then draining just what the user asked for.
+    if (drained) err = sp_io_fill(reader);
 
-    num_read = sp_min(remaining, reader->buffer.len);
-    reader->cursor = num_read;
-    sp_mem_copy(buffer + num_drained, reader->buffer.data, num_read);
+    num_read = sp_min(size, reader->buffer.len - reader->cursor);
+    sp_mem_copy(buffer, reader->buffer.data + reader->cursor, num_read);
+    reader->cursor += num_read;
   }
 
-  u64 num_total = num_drained + num_read;
-  if (bytes_read) *bytes_read = num_total;
-  if (err == SP_ERR_IO_EOF && num_total) return SP_OK;
+  if (bytes_read) *bytes_read = num_read;
+  if (err == SP_ERR_IO_EOF && num_read) return SP_OK;
   return err;
+}
+
+sp_err_t sp_io_read_all(sp_io_reader_t* reader, void* ptr, u64 size, u64* bytes_read) {
+  sp_err_t result = SP_OK;
+  u64 total = 0;
+  while (total < size) {
+    u64 n = 0;
+    result = sp_io_read(reader, (u8*)ptr + total, size - total, &n);
+    total += n;
+    if (result) goto done;
+  }
+
+done:
+  if (bytes_read) *bytes_read = total;
+  return result;
 }
 
 sp_err_t sp_io_seeking_reader_seek(sp_io_seeking_reader_t* r, s64 offset, sp_io_whence_t whence, s64* position) {
@@ -13953,78 +17603,23 @@ void sp_io_seeking_reader_from_file_reader(sp_io_seeking_reader_t* sr, sp_io_fil
 
 sp_err_t sp_io_file_writer_write(sp_io_writer_t* writer, const void* ptr, u64 size, u64* bytes_written) {
   sp_io_file_writer_t* w = (sp_io_file_writer_t*)writer;
-  s64 rc = sp_sys_pwrite(w->fd, ptr, size, w->pos);
-  u64 num_bytes = rc < 0 ? 0 : (u64)rc;
+  u64 num_bytes = 0;
+  sp_err_t err = sp_sys_pwrite(w->fd, ptr, size, w->pos, &num_bytes);
   w->pos += num_bytes;
   if (w->pos > w->size) w->size = w->pos;
-
-  sp_err_t result = SP_OK;
-  if (rc < 0) {
-    result = SP_ERR_IO_WRITE_FAILED;
-  }
-  else if (size && !num_bytes) {
-    result = SP_ERR_IO_EOF;
-  }
-
   if (bytes_written) *bytes_written = num_bytes;
-  return result;
+  return err;
 }
 
-// Kernel-to-kernel fast path. Linux-only; on other platforms the read_from
-// callback isn't wired up and sp_io_copy falls through to the generic loop.
-// Asks the reader for an fd; if it has one, uses copy_file_range to move
-// bytes without bouncing through userspace. On first-call failure returns
-// SP_ERR_IO_UNIMPLEMENTED so the caller falls back. Partial progress + error
-// is reported faithfully.
-#if defined(SP_LINUX)
-sp_err_t sp_io_file_writer_read_from(sp_io_writer_t* writer, sp_io_reader_t* r, u64* bytes_moved) {
+sp_err_t sp_io_file_writer_transfer(sp_io_writer_t* writer, sp_sys_fd_t fd, u64* pos, u64 count, u64* bytes_moved) {
   sp_io_file_writer_t* w = (sp_io_file_writer_t*)writer;
-  u64 total = 0;
-
-  if (!r->as_fd) { if (bytes_moved) *bytes_moved = 0; return SP_ERR_IO_UNIMPLEMENTED; }
-
-  sp_sys_fd_t in_fd = SP_SYS_INVALID_FD;
-  u64* in_pos = SP_NULLPTR;
-  if (r->as_fd(r, &in_fd, &in_pos) != SP_OK) {
-    if (bytes_moved) *bytes_moved = 0;
-    return SP_ERR_IO_UNIMPLEMENTED;
-  }
-  if (!in_pos) {
-    // Source is streaming (cursor in kernel). copy_file_range requires
-    // regular files on both sides, so it would fail anyway. Bail cleanly.
-    if (bytes_moved) *bytes_moved = 0;
-    return SP_ERR_IO_UNIMPLEMENTED;
-  }
-
-  const u64 chunk = (u64)1 << 30;
-
-  while (true) {
-    s64 rc;
-    do {
-      rc = sp_syscall(SP_SYSCALL_NUM_COPY_FILE_RANGE, in_fd, in_pos, w->fd, &w->pos, chunk, 0);
-    } while (rc == -1 && errno == SP_EINTR);
-
-    if (rc < 0) {
-      if (total == 0) {
-        // If the first call fails, the operation isn't supported, so we tell
-        // the caller to fall back to a userspace copy
-        if (bytes_moved) *bytes_moved = 0;
-        return SP_ERR_IO_UNIMPLEMENTED;
-      }
-
-      // We already made progress; surface as a write failure.
-      if (bytes_moved) *bytes_moved = total;
-      return SP_ERR_IO_WRITE_FAILED;
-    }
-    if (rc == 0) break;  // EOF on source
-    total += (u64)rc;
-  }
-
+  u64 moved = 0;
+  sp_err_t err = sp_sys_transfer_positional(fd, pos, w->fd, count, w->pos, &moved);
+  w->pos += moved;
   if (w->pos > w->size) w->size = w->pos;
-  if (bytes_moved) *bytes_moved = total;
-  return SP_OK;
+  if (bytes_moved) *bytes_moved = moved;
+  return err;
 }
-#endif
 
 sp_err_t sp_io_file_writer_seek(sp_io_file_writer_t* w, s64 offset, sp_io_whence_t whence, s64* position) {
   sp_assert(w);
@@ -14055,9 +17650,10 @@ sp_err_t sp_io_file_writer_size(sp_io_file_writer_t* w, u64* size) {
 
 sp_err_t sp_io_file_writer_size_force(sp_io_file_writer_t* w, u64* size) {
   sp_sys_file_meta_t st = sp_zero;
-  if (sp_sys_get_file_metadata(w->fd, &st) < 0) {
+  sp_err_t err = sp_sys_get_file_metadata(w->fd, &st);
+  if (err) {
     if (size) *size = 0;
-    return SP_ERR_IO;
+    return err;
   }
   w->size = (u64)st.size;
   if (size) *size = w->size;
@@ -14072,39 +17668,35 @@ sp_err_t sp_io_file_writer_close(sp_io_file_writer_t* w) {
 
   if (w->close_mode != SP_IO_CLOSE_MODE_AUTO) return SP_OK;
 
-  if (sp_sys_close(w->fd) < 0) {
-    return SP_ERR_IO_CLOSE_FAILED;
-  }
-  return SP_OK;
+  return sp_sys_close(w->fd);
 }
 
 sp_err_t sp_io_file_writer_from_fd(sp_io_file_writer_t* w, sp_sys_fd_t fd, sp_io_close_mode_t close_mode) {
   *w = (sp_io_file_writer_t) {
     .base = {
       .write     = sp_io_file_writer_write,
-#if defined(SP_LINUX)
-      .read_from = sp_io_file_writer_read_from,
-#endif
+      .transfer  = sp_io_file_writer_transfer,
     },
     .fd = fd,
     .close_mode = close_mode,
   };
 
-  if (sp_io_file_writer_size_force(w, SP_NULLPTR) != SP_OK) {
+  sp_err_t err = sp_io_file_writer_size_force(w, SP_NULLPTR);
+  if (err) {
     if (close_mode == SP_IO_CLOSE_MODE_AUTO) sp_sys_close(fd);
     *w = sp_zero_s(sp_io_file_writer_t);
-    return SP_ERR_IO;
+    return err;
   }
   return SP_OK;
 }
 
 sp_err_t sp_io_file_writer_from_path(sp_io_file_writer_t* w, sp_str_t path) {
-  s32 flags = SP_O_WRONLY | SP_O_CREAT | SP_O_TRUNC | SP_O_BINARY;
-  sp_sys_fd_t fd = sp_sys_open_s(sp_sys_get_root(0), path, flags, 0644);
-
-  if (fd == SP_SYS_INVALID_FD) {
+  u32 flags = SP_SYS_OPEN_CREATE | SP_SYS_OPEN_TRUNCATE;
+  sp_sys_fd_t fd = SP_SYS_INVALID_FD;
+  sp_err_t err = sp_sys_open_s(sp_sys_get_root(0), path, SP_SYS_OPEN_MODE_WO, flags, &fd);
+  if (err) {
     *w = sp_zero_s(sp_io_file_writer_t);
-    return SP_ERR_IO_OPEN_FAILED;
+    return err;
   }
 
   return sp_io_file_writer_from_fd(w, fd, SP_IO_CLOSE_MODE_AUTO);
@@ -14129,16 +17721,9 @@ static sp_err_t sp_io_drain(sp_io_writer_t* writer, const void* data, u64 size, 
     const u8* ptr = ((const u8*)data) + total;
     u64 remaining = size - total;
 
-    // Account for any partial progress BEFORE inspecting the error. The (bytes,
-    // error) pair is orthogonal: a backend that returns SP_ERR_IO_NO_SPACE with
-    // written=4 has committed those 4 bytes, and the caller deserves to know.
-    //
-    // If write() returns 0 bytes written, but also does not report an error, we just
-    // keep looping. If this keeps happening, though, you're stuck. Defensively, it
-    // makes sense to just bail rather than risk *any* deadlock, but I think that doing
-    // that would just hide the real breaking of an invariant.
+    // An error doesn't change the fact that the bytes were actually written
     u64 written = 0;
-    result = writer->write(writer, ptr, remaining, &written);
+    result = sp_io_backend_write(writer, ptr, remaining, &written);
     total += written;
     if (result) goto done;
   }
@@ -14188,7 +17773,7 @@ sp_err_t sp_io_write(sp_io_writer_t* writer, const void* data, u64 size, u64* by
   const u8* ptr = (const u8*)data;
 
   if (!writer->buffer.data) {
-    err = writer->write(writer, data, size, &total);
+    err = sp_io_backend_write(writer, data, size, &total);
     goto done;
   }
 
@@ -14196,13 +17781,12 @@ sp_err_t sp_io_write(sp_io_writer_t* writer, const void* data, u64 size, u64* by
     // If the write is too big for the buffer, just flush whatever's currently
     // buffered and hand the data to the backend in a single write.
     sp_try_goto(sp_io_flush(writer), err, done);
-    sp_try_goto(writer->write(writer, ptr, size, &total), err, done);
+    sp_try_goto(sp_io_backend_write(writer, ptr, size, &total), err, done);
   }
   else {
     // If the write is bufferable in general, but the buffer is too full, flush it first.
     // The correct way to do this (on POSIX) is with writev(), which lets you write whatever's
-    // buffered AND the new data in one syscall. But this requires a bit of platform code,
-    // and there is a larger task to stop using libc to implement sp_io on Windows.
+    // buffered AND the new data in one syscall. One day.
     if (writer->buffer.capacity - writer->buffer.len < size) {
       sp_try_goto(sp_io_flush(writer), err, done);
     }
@@ -14250,16 +17834,20 @@ done:
   return result;
 }
 
-sp_io_stream_writer_t sp_io_get_std_out() {
-  sp_io_stream_writer_t io = sp_zero;
-  sp_io_stream_writer_from_fd(&io, sp_sys_stdout, SP_IO_CLOSE_MODE_NONE);
-  return io;
+sp_io_writer_t* sp_io_get_std_out() {
+  if (!sp_rt.std.out.base.write) {
+    sp_io_stream_writer_from_fd(&sp_rt.std.out, sp_sys_stdout, SP_IO_CLOSE_MODE_NONE);
+    if (sp_sys_is_tty(sp_sys_stdout)) sp_sys_tty_use_vt(sp_sys_stdout);
+  }
+  return &sp_rt.std.out.base;
 }
 
-sp_io_stream_writer_t sp_io_get_std_err() {
-  sp_io_stream_writer_t io = sp_zero;
-  sp_io_stream_writer_from_fd(&io, sp_sys_stderr, SP_IO_CLOSE_MODE_NONE);
-  return io;
+sp_io_writer_t* sp_io_get_std_err() {
+  if (!sp_rt.std.err.base.write) {
+    sp_io_stream_writer_from_fd(&sp_rt.std.err, sp_sys_stderr, SP_IO_CLOSE_MODE_NONE);
+    if (sp_sys_is_tty(sp_sys_stderr)) sp_sys_tty_use_vt(sp_sys_stderr);
+  }
+  return &sp_rt.std.err.base;
 }
 
 /////////
@@ -14392,11 +17980,13 @@ SP_API s32 sp_app_run(sp_app_config_t config) {
 void* sp_mem_os_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size, void* ptr, u64 old_size) {
   (void)user_data;
   switch (mode) {
-    case SP_ALLOCATOR_MODE_ALLOC:  return sp_mem_os_alloc(size);
-    case SP_ALLOCATOR_MODE_RESIZE: return sp_mem_os_realloc(ptr, old_size, size);
-    case SP_ALLOCATOR_MODE_FREE:   sp_mem_os_free(ptr, old_size); return SP_NULLPTR;
-    default:                       return SP_NULLPTR;
+    case SP_ALLOCATOR_MODE_ALLOC:
+    case SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED:  return sp_mem_os_alloc(size);
+    case SP_ALLOCATOR_MODE_RESIZE:
+    case SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED: return sp_mem_os_realloc(ptr, old_size, size);
+    case SP_ALLOCATOR_MODE_FREE:       sp_mem_os_free(ptr, old_size); return SP_NULLPTR;
   }
+  return SP_NULLPTR;
 }
 
 sp_mem_t sp_mem_os_new() {
@@ -14528,29 +18118,24 @@ void sp_mem_heap_span_release(sp_mem_heap_t* heap, sp_mem_heap_span_t* span) {
   sp_mem_heap_list_push(&heap->recycled, span);
 }
 
-void* sp_mem_heap_alloc(sp_mem_heap_t* heap, u64 size) {
-  if (!heap) return SP_NULLPTR;
+void* sp_mem_heap_alloc_chunk(sp_mem_heap_t* heap, u32 bucket) {
+  sp_mem_heap_span_t* span = heap->buckets[bucket].partial;
+  if (!span) span = sp_mem_heap_span_new(heap, bucket);
+  if (!span) return SP_NULLPTR;
 
-  u32 bucket = sp_mem_heap_bucket_of(size);
-  if (bucket < SP_MEM_HEAP_NUM_BUCKETS) {
-    sp_mem_heap_span_t* span = heap->buckets[bucket].partial;
-    if (!span) span = sp_mem_heap_span_new(heap, bucket);
-    if (!span) return SP_NULLPTR;
-
-    void* chunk = span->free_head;
-    span->free_head = *(void**)chunk;
-    span->in_use++;
-    if (!span->free_head) {
-      sp_mem_heap_list_unlink(&heap->buckets[bucket].partial, span);
-      sp_mem_heap_list_push(&heap->buckets[bucket].full, span);
-    }
-
-    u64 bucket_size = sp_mem_heap_bucket_size(bucket);
-    heap->bytes_used += bucket_size;
-    sp_mem_zero(chunk, bucket_size);
-    return chunk;
+  void* chunk = span->free_head;
+  span->free_head = *(void**)chunk;
+  span->in_use++;
+  if (!span->free_head) {
+    sp_mem_heap_list_unlink(&heap->buckets[bucket].partial, span);
+    sp_mem_heap_list_push(&heap->buckets[bucket].full, span);
   }
 
+  heap->bytes_used += sp_mem_heap_bucket_size(bucket);
+  return chunk;
+}
+
+void* sp_mem_heap_alloc_large(sp_mem_heap_t* heap, u64 size) {
   u64 capacity = sp_align_offset(size + sizeof(sp_mem_heap_large_t), SP_MEM_HEAP_SPAN_SIZE);
   if (capacity <= size) return SP_NULLPTR;
   sp_mem_heap_large_t* large = (sp_mem_heap_large_t*)sp_sys_alloc(capacity);
@@ -14563,6 +18148,28 @@ void* sp_mem_heap_alloc(sp_mem_heap_t* heap, u64 size) {
   sp_mem_heap_track_reserve(heap, capacity);
   heap->bytes_used += size;
   return large + 1;
+}
+
+void* sp_mem_heap_alloc(sp_mem_heap_t* heap, u64 size) {
+  if (!heap) return SP_NULLPTR;
+
+  u32 bucket = sp_mem_heap_bucket_of(size);
+  if (bucket >= SP_MEM_HEAP_NUM_BUCKETS) return sp_mem_heap_alloc_large(heap, size);
+
+  void* chunk = sp_mem_heap_alloc_chunk(heap, bucket);
+  if (chunk) sp_mem_zero(chunk, sp_mem_heap_bucket_size(bucket));
+  return chunk;
+}
+
+void* sp_mem_heap_alloc_uninitialized(sp_mem_heap_t* heap, u64 size) {
+  if (!heap) return SP_NULLPTR;
+
+  u32 bucket = sp_mem_heap_bucket_of(size);
+  if (bucket >= SP_MEM_HEAP_NUM_BUCKETS) return sp_mem_heap_alloc_large(heap, size);
+
+  void* chunk = sp_mem_heap_alloc_chunk(heap, bucket);
+  if (chunk) sp_mem_zero((u8*)chunk + size, sp_mem_heap_bucket_size(bucket) - size);
+  return chunk;
 }
 
 void sp_mem_heap_free(sp_mem_heap_t* heap, void* ptr) {
@@ -14597,51 +18204,60 @@ void sp_mem_heap_free(sp_mem_heap_t* heap, void* ptr) {
 }
 
 void* sp_mem_heap_realloc(sp_mem_heap_t* heap, void* ptr, u64 size) {
-  if (!heap) return SP_NULLPTR;
-  if (!ptr) return sp_mem_heap_alloc(heap, size);
-  if (!size) {
-    sp_mem_heap_free(heap, ptr);
-    return SP_NULLPTR;
-  }
+  return sp_mem_heap_on_alloc(heap, SP_ALLOCATOR_MODE_RESIZE, size, ptr, 0);
+}
 
-  u64 old_size = 0;
-  sp_mem_heap_span_t* span = sp_mem_heap_find_span(heap, ptr);
-  if (span) {
-    u64 bucket_size = sp_mem_heap_bucket_size(span->bucket);
-    if (sp_mem_heap_bucket_of(size) == span->bucket) {
-      sp_mem_zero((u8*)ptr + size, bucket_size - size);
-      return ptr;
-    }
-    old_size = bucket_size;
-  }
-  else {
-    sp_mem_heap_large_t* large = ((sp_mem_heap_large_t*)ptr) - 1;
-    sp_assert(large->magic == SP_MEM_HEAP_LARGE_MAGIC);
-    sp_assert(large->heap == heap);
-    if (size > SP_MEM_HEAP_MAX_SMALL && size <= large->capacity - sizeof(sp_mem_heap_large_t)) {
-      if (size < large->size) sp_mem_zero((u8*)ptr + size, large->size - size);
-      heap->bytes_used -= large->size;
-      heap->bytes_used += size;
-      large->size = size;
-      return ptr;
-    }
-    old_size = large->size;
-  }
-
-  void* fresh = sp_mem_heap_alloc(heap, size);
-  if (!fresh) return SP_NULLPTR;
-  sp_mem_copy(fresh, ptr, sp_min(old_size, size));
-  sp_mem_heap_free(heap, ptr);
-  return fresh;
+void* sp_mem_heap_realloc_uninitialized(sp_mem_heap_t* heap, void* ptr, u64 size) {
+  return sp_mem_heap_on_alloc(heap, SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED, size, ptr, 0);
 }
 
 void* sp_mem_heap_on_alloc(void* user_data, sp_mem_alloc_mode_t mode, u64 size, void* ptr, u64 old_size) {
   sp_unused(old_size);
   sp_mem_heap_t* heap = (sp_mem_heap_t*)user_data;
   switch (mode) {
-    case SP_ALLOCATOR_MODE_ALLOC:  return sp_mem_heap_alloc(heap, size);
-    case SP_ALLOCATOR_MODE_RESIZE: return sp_mem_heap_realloc(heap, ptr, size);
-    case SP_ALLOCATOR_MODE_FREE:   sp_mem_heap_free(heap, ptr); return SP_NULLPTR;
+    case SP_ALLOCATOR_MODE_ALLOC:     return sp_mem_heap_alloc(heap, size);
+    case SP_ALLOCATOR_MODE_ALLOC_UNINITIALIZED: return sp_mem_heap_alloc_uninitialized(heap, size);
+    case SP_ALLOCATOR_MODE_RESIZE:
+    case SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED: {
+      bool uninitialized = mode == SP_ALLOCATOR_MODE_RESIZE_UNINITIALIZED;
+      if (!heap) return SP_NULLPTR;
+      if (!ptr) return uninitialized ? sp_mem_heap_alloc_uninitialized(heap, size) : sp_mem_heap_alloc(heap, size);
+      if (!size) {
+        sp_mem_heap_free(heap, ptr);
+        return SP_NULLPTR;
+      }
+
+      u64 chunk_size = 0;
+      sp_mem_heap_span_t* span = sp_mem_heap_find_span(heap, ptr);
+      if (span) {
+        u64 bucket_size = sp_mem_heap_bucket_size(span->bucket);
+        if (sp_mem_heap_bucket_of(size) == span->bucket) {
+          sp_mem_zero((u8*)ptr + size, bucket_size - size);
+          return ptr;
+        }
+        chunk_size = bucket_size;
+      }
+      else {
+        sp_mem_heap_large_t* large = ((sp_mem_heap_large_t*)ptr) - 1;
+        sp_assert(large->magic == SP_MEM_HEAP_LARGE_MAGIC);
+        sp_assert(large->heap == heap);
+        if (size > SP_MEM_HEAP_MAX_SMALL && size <= large->capacity - sizeof(sp_mem_heap_large_t)) {
+          if (size < large->size) sp_mem_zero((u8*)ptr + size, large->size - size);
+          heap->bytes_used -= large->size;
+          heap->bytes_used += size;
+          large->size = size;
+          return ptr;
+        }
+        chunk_size = large->size;
+      }
+
+      void* fresh = uninitialized ? sp_mem_heap_alloc_uninitialized(heap, size) : sp_mem_heap_alloc(heap, size);
+      if (!fresh) return SP_NULLPTR;
+      sp_mem_copy(fresh, ptr, sp_min(chunk_size, size));
+      sp_mem_heap_free(heap, ptr);
+      return fresh;
+    }
+    case SP_ALLOCATOR_MODE_FREE: sp_mem_heap_free(heap, ptr); return SP_NULLPTR;
   }
   return SP_NULLPTR;
 }
@@ -14657,8 +18273,16 @@ void* sp_alloc(sp_mem_t allocator, u64 size) {
   return sp_mem_allocator_alloc(allocator, size);
 }
 
+void* sp_alloc_uninitialized(sp_mem_t allocator, u64 size) {
+  return sp_mem_allocator_alloc_uninitialized(allocator, size);
+}
+
 void* sp_realloc(sp_mem_t allocator, void* memory, u64 old_size, u64 size) {
   return sp_mem_allocator_realloc(allocator, memory, old_size, size);
+}
+
+void* sp_realloc_uninitialized(sp_mem_t allocator, void* memory, u64 old_size, u64 size) {
+  return sp_mem_allocator_realloc_uninitialized(allocator, memory, old_size, size);
 }
 
 void sp_free(sp_mem_t allocator, void* memory, u64 size) {
@@ -14833,26 +18457,11 @@ const c8* sp_io_dyn_mem_writer_as_cstr(sp_io_dyn_mem_writer_t* w) {
   return sp_mem_buffer_as_cstr(&w->storage);
 }
 
-sp_err_t sp_fmt_check_type(sp_fmt_arg_kind_t expected, sp_fmt_arg_kind_t actual, sp_err_t err) {
-  return (expected && !(expected & actual)) ? err : SP_OK;
-}
-
-sp_err_t sp_fmt_check_arg(sp_fmt_arg_kind_t expected, sp_fmt_arg_kind_t actual) {
-  return sp_fmt_check_type(expected, actual, SP_ERR_FMT_DIRECTIVE_ARG_WRONG_KIND);
-}
-
-sp_err_t sp_fmt_check_param(sp_fmt_arg_kind_t expected, sp_fmt_arg_kind_t actual) {
-  return sp_fmt_check_type(expected, actual, SP_ERR_FMT_WRONG_PARAM_KIND);
-}
-
-bool sp_fmt_is_directive_dynamic(u8 dynamic, u8 index) {
-  return dynamic & (1u << index);
-}
-
 sp_fmt_arg_t sp_fmt_arg_from_argv(sp_fmt_argv_t v) {
   sp_fmt_arg_t arg = sp_zero;
   arg.id = v.id;
   arg.value = v.value;
+  arg.fn = v.fn;
   return arg;
 }
 
@@ -14876,8 +18485,7 @@ sp_err_t sp_fmt_io(sp_io_writer_t* io, const c8* fmt, ...) {
 sp_err_t sp_fmt_std_out(const c8* fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  sp_io_stream_writer_t io = sp_io_get_std_out();
-  sp_err_t result = sp_fmt_io_v(&io.base, sp_cstr_as_str(fmt), args);
+  sp_err_t result = sp_fmt_io_v(sp_io_get_std_out(), sp_cstr_as_str(fmt), args);
   va_end(args);
   return result;
 }
@@ -14885,8 +18493,7 @@ sp_err_t sp_fmt_std_out(const c8* fmt, ...) {
 sp_err_t sp_fmt_std_err(const c8* fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  sp_io_stream_writer_t io = sp_io_get_std_err();
-  sp_err_t result = sp_fmt_io_v(&io.base, sp_cstr_as_str(fmt), args);
+  sp_err_t result = sp_fmt_io_v(sp_io_get_std_err(), sp_cstr_as_str(fmt), args);
   va_end(args);
   return result;
 }
@@ -14935,7 +18542,14 @@ sp_str_r sp_fmt_buf_v(c8* buffer, u64 len, sp_str_t fmt, va_list args) {
   return str;
 }
 
-sp_err_t sp_fmt_io_v(sp_io_writer_t* io, sp_str_t fmt, va_list args) {
+typedef struct {
+  sp_io_dyn_mem_writer_t* io;
+  sp_da(sp_fmt_span_t) spans;
+} sp_fmt_span_sink_t;
+
+static sp_err_t sp_fmt_render_ex(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_span_sink_t* sink);
+
+static sp_err_t sp_fmt_io_v_ex(sp_io_writer_t* io, sp_str_t fmt, va_list args, sp_fmt_span_sink_t* sink) {
   sp_fmt_parser_t p = { .str = fmt };
 
   while (true) {
@@ -14953,32 +18567,33 @@ sp_err_t sp_fmt_io_v(sp_io_writer_t* io, sp_str_t fmt, va_list args) {
       sp_fmt_spec_t spec = sp_zero;
       sp_try(sp_fmt_parse_specifier(&p, &spec));
 
-      if (spec.dynamic.fill) {
+      if (spec.dynamic & SP_FMT_DYNAMIC_FILL) {
         s64 v;
-        sp_try(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v));
+        sp_try_as(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v), SP_ERR_FMT_WRONG_FILL_KIND);
         spec.fill = sp_cast(u8, v);
       }
-      if (spec.dynamic.width) {
+      if (spec.dynamic & SP_FMT_DYNAMIC_WIDTH) {
         s64 v;
-        sp_try(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v));
+        sp_try_as(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v), SP_ERR_FMT_WRONG_WIDTH_KIND);
         spec.width = sp_cast(u32, sp_clamp(v, 0, SP_FMT_WIDTH_MAX));
       }
-      if (spec.dynamic.precision) {
+      if (spec.dynamic & SP_FMT_DYNAMIC_PRECISION) {
         s64 v;
-        sp_try(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v));
+        sp_try_as(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v), SP_ERR_FMT_WRONG_PRECISION_KIND);
         sp_opt_set(spec.precision, sp_cast(u8, sp_clamp(v, 0, 255)));
       }
-
-      sp_fmt_arg_t params [SP_FMT_MAX_DIRECTIVES] = sp_zero;
-      for (u8 it = 0; it < spec.directive.num; it++) {
-        if (sp_fmt_is_directive_dynamic(spec.dynamic.directive, it)) {
-          params[it] = sp_fmt_arg_from_argv(va_arg(args, sp_fmt_argv_t));
+      sp_for(i, spec.directive.num) {
+        if (spec.dynamic & sp_fmt_dynamic_directive(i)) {
+          s64 v;
+          sp_try_as(sp_fmt_pull_specifier_arg(va_arg(args, sp_fmt_argv_t), &v), SP_ERR_FMT_WRONG_STYLE_KIND);
+          if (v < sp_fmt_style_none || v > sp_fmt_style_unset) return SP_ERR_FMT_UNKNOWN_DIRECTIVE;
+          spec.directive.styles[i] = sp_cast(sp_fmt_style_t, v);
         }
       }
 
       sp_fmt_arg_t arg = sp_fmt_arg_from_argv(va_arg(args, sp_fmt_argv_t));
       arg.spec = spec;
-      sp_try(sp_fmt_render(io, &arg, params));
+      sp_try(sp_fmt_render_ex(io, &arg, sink));
       continue;
     }
 
@@ -14999,158 +18614,180 @@ sp_err_t sp_fmt_io_v(sp_io_writer_t* io, sp_str_t fmt, va_list args) {
   return SP_OK;
 }
 
-void sp_log(const c8* fmt, ...) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
+sp_err_t sp_fmt_io_v(sp_io_writer_t* io, sp_str_t fmt, va_list args) {
+  return sp_fmt_io_v_ex(io, fmt, args, SP_NULLPTR);
+}
+
+sp_fmt_styled_r sp_fmt_styled_v(sp_mem_t mem, sp_str_t fmt, va_list args) {
+  sp_fmt_styled_r result = sp_zero;
+
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  sp_fmt_span_sink_t sink = {
+    .io = &io,
+    .spans = sp_da_new(mem, sp_fmt_span_t),
+  };
+
+  result.err = sp_fmt_io_v_ex(&io.base, fmt, args, &sink);
+  if (!result.err) {
+    result.text = sp_io_dyn_mem_writer_as_str(&io);
+    result.spans = sink.spans;
+  }
+  return result;
+}
+
+sp_fmt_styled_r sp_fmt_styled(sp_mem_t mem, const c8* fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  sp_fmt_io_v(sp_tls_std_out(tls), sp_str_view(fmt), args);
+  sp_fmt_styled_r result = sp_fmt_styled_v(mem, sp_cstr_as_str(fmt), args);
   va_end(args);
-  sp_io_write_cstr(sp_tls_std_out(tls), "\n", SP_NULLPTR);
+  return result;
+}
+
+void sp_log(const c8* fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  sp_fmt_io_v(sp_io_get_std_out(), sp_str_view(fmt), args);
+  va_end(args);
+  sp_io_write_cstr(sp_io_get_std_out(), "\n", SP_NULLPTR);
 }
 
 void sp_log_str(sp_str_t fmt, ...) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
   va_list args;
   va_start(args, fmt);
-  sp_fmt_io_v(sp_tls_std_out(tls), fmt, args);
+  sp_fmt_io_v(sp_io_get_std_out(), fmt, args);
   va_end(args);
-  sp_io_write_cstr(sp_tls_std_out(tls), "\n", SP_NULLPTR);
+  sp_io_write_cstr(sp_io_get_std_out(), "\n", SP_NULLPTR);
 }
 
 void sp_log_err(const c8* fmt, ...) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
   va_list args;
   va_start(args, fmt);
-  sp_fmt_io_v(sp_tls_std_out(tls), sp_str_view(fmt), args);
+  sp_fmt_io_v(sp_io_get_std_err(), sp_str_view(fmt), args);
   va_end(args);
-  sp_io_write_cstr(sp_tls_std_out(tls), "\n", SP_NULLPTR);
+  sp_io_write_cstr(sp_io_get_std_err(), "\n", SP_NULLPTR);
 }
 
 void sp_print(const c8* fmt, ...) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
   va_list args;
   va_start(args, fmt);
-  sp_fmt_io_v(sp_tls_std_out(tls), sp_str_view(fmt), args);
+  sp_fmt_io_v(sp_io_get_std_out(), sp_str_view(fmt), args);
   va_end(args);
 }
 
 void sp_print_str(sp_str_t fmt, ...) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
   va_list args;
   va_start(args, fmt);
-  sp_fmt_io_v(sp_tls_std_out(tls), fmt, args);
+  sp_fmt_io_v(sp_io_get_std_out(), fmt, args);
   va_end(args);
 }
 
 void sp_print_err(const c8* fmt, ...) {
-  sp_tls_rt_t* tls = sp_tls_rt_get();
   va_list args;
   va_start(args, fmt);
-  sp_fmt_io_v(sp_tls_std_err(tls), sp_str_view(fmt), args);
+  sp_fmt_io_v(sp_io_get_std_err(), sp_str_view(fmt), args);
   va_end(args);
 }
 
-bool sp_fmt_dir_has_params(sp_fmt_directive_t* dir) {
-  return dir->params != sp_fmt_id_none;
+sp_err_t sp_fmt_render_bytes(sp_io_writer_t* io, sp_fmt_arg_t* arg) {
+  u64 n = 0;
+  switch (arg->id) {
+    case sp_fmt_id_u64: n = arg->value.u; break;
+    case sp_fmt_id_s64: n = arg->value.i < 0 ? 0 : (u64)arg->value.i; break;
+    case sp_fmt_id_f64: {
+      f64 f = arg->value.f;
+      n = !(f >= 0) ? 0 : (f >= 1.8446744073709552e19 ? SP_LIMIT_U64_MAX : (u64)f);
+      break;
+    }
+    case sp_fmt_id_str: n = arg->value.s.len; break;
+    case sp_fmt_id_ptr:
+    case sp_fmt_id_none: return SP_ERR_FMT_BAD_ARG;
+  }
+  return sp_fmt_write_size(io, n);
 }
 
-sp_err_t sp_fmt_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* directive_params) {
-  sp_fmt_directive_t* directives [SP_FMT_MAX_DIRECTIVES] = sp_zero;
-  sp_fmt_arg_t* args [SP_FMT_MAX_DIRECTIVES] = sp_zero;
-
+static sp_err_t sp_fmt_render_ex(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_span_sink_t* sink) {
   u8 num_dirs = arg->spec.directive.num;
-  sp_fmt_fn_t render_fn = SP_NULLPTR;
-  sp_fmt_arg_t* render_param = SP_NULLPTR;
 
-  sp_for(i, arg->spec.directive.num) {
-    sp_fmt_directive_t* d = sp_fmt_directive_lookup(arg->spec.directive.names[i]);
-    if (!d) return SP_ERR_FMT_UNKNOWN_DIRECTIVE;
-
-    sp_try(sp_fmt_check_param(d->args, arg->id));
-
-    //sp_fmt_arg_t arg = sp_zero;
-    bool is_dynamic = (arg->spec.dynamic.directive & (1u << i)) != 0;
-    bool is_literal = !sp_str_empty(arg->spec.directive.args[i]);
-    if (is_literal) {
-      directive_params[i] = (sp_fmt_arg_t){
-        .id = sp_fmt_id_str,
-        .value = {
-          .s = arg->spec.directive.args[i],
-        }
-      };
-    }
-    if (is_dynamic || is_literal) args[i] = &directive_params[i];
-
-    if (!sp_fmt_dir_has_params(d)) {
-      if (args[i]) return SP_ERR_FMT_DIRECTIVE_ARG_UNEXPECTED;
+  sp_for(i, num_dirs) {
+    sp_fmt_style_t style;
+    if (arg->spec.dynamic & sp_fmt_dynamic_directive(i)) {
+      style = arg->spec.directive.styles[i];
+      if (style < sp_fmt_style_none || style > sp_fmt_style_unset) return SP_ERR_FMT_UNKNOWN_DIRECTIVE;
     }
     else {
-      if (!args[i]) return SP_ERR_FMT_DIRECTIVE_ARG_MISSING;
-      if (!(d->params & args[i]->id)) return SP_ERR_FMT_DIRECTIVE_ARG_WRONG_KIND;
+      sp_try(sp_fmt_style_from_name(arg->spec.directive.names[i], &style));
     }
-
-    if (d->kind == sp_fmt_directive_renderer) {
-      if (render_fn) return SP_ERR_FMT_TOO_MANY_RENDERERS;
-      render_fn = d->renderer;
-      render_param = args[i];
-    }
-
-    directives[i] = d;
-  }
-
-  bool is_opaque = (render_fn != SP_NULLPTR);
-  if (arg->id == sp_fmt_id_custom) {
-    if (!arg->value.custom.fn) return SP_ERR_FMT_CUSTOM_WITHOUT_FN;
-    render_fn = arg->value.custom.fn;
-    render_param = SP_NULLPTR;
-    is_opaque = true;
-  }
-
-  if (is_opaque && arg->spec.width) return SP_ERR_FMT_WIDTH_ON_OPAQUE_RENDERER;
-
-  if (is_opaque) {
-    sp_for(it, num_dirs) {
-      if (directives[it]->kind != sp_fmt_directive_decorator) continue;
-      sp_fmt_fn_t before = directives[it]->decorator.before;
-      if (before) before(io, arg, args[it]);
-    }
-    render_fn(io, arg, render_param);
-    u8 j = num_dirs;
-    while (j--) {
-      if (directives[j]->kind != sp_fmt_directive_decorator) continue;
-      sp_fmt_fn_t after = directives[j]->decorator.after;
-      if (after) after(io, arg, args[j]);
-    }
-    return SP_OK;
+    arg->spec.directive.styles[i] = style;
   }
 
   sp_str_t content = sp_zero;
   c8 buf[64];
   sp_io_mem_writer_t cw = sp_zero;
-  switch (arg->id) {
-    case sp_fmt_id_u64:
-    case sp_fmt_id_s64:
-    case sp_fmt_id_f64:
-    case sp_fmt_id_ptr: {
-      sp_io_mem_writer_from_buffer(&cw, buf, sizeof(buf));
-      sp_fmt_render_default(&cw.base, arg, SP_NULLPTR);
-      content = sp_io_mem_writer_as_str(&cw);
-      break;
+  sp_io_dyn_mem_writer_t dw = sp_zero;
+
+  if (arg->fn) {
+    sp_io_dyn_mem_writer_init(sp_mem_get_scratch(), &dw);
+    sp_try(arg->fn(&dw.base, arg));
+    content = sp_io_dyn_mem_writer_as_str(&dw);
+  }
+  else if (arg->spec.renderer == 'B') {
+    sp_io_dyn_mem_writer_init(sp_mem_get_scratch(), &dw);
+    sp_try(sp_fmt_render_bytes(&dw.base, arg));
+    content = sp_io_dyn_mem_writer_as_str(&dw);
+  }
+  else if (arg->spec.renderer == 'c') {
+    if (arg->id != sp_fmt_id_u64 && arg->id != sp_fmt_id_s64) return SP_ERR_FMT_BAD_ARG;
+    sp_io_mem_writer_from_buffer(&cw, buf, sizeof(buf));
+    sp_io_write_c8(&cw.base, sp_cast(c8, arg->value.u));
+    content = sp_io_mem_writer_as_str(&cw);
+  }
+  else {
+    sp_fmt_radix_t radix = SP_FMT_RADIX_DECIMAL;
+    switch (arg->spec.renderer) {
+      case 'b': radix = SP_FMT_RADIX_BINARY;    break;
+      case 'o': radix = SP_FMT_RADIX_OCTAL;     break;
+      case 'x': radix = SP_FMT_RADIX_HEX;       break;
+      case 'X': radix = SP_FMT_RADIX_HEX_UPPER; break;
     }
-    case sp_fmt_id_str: {
-      content = arg->value.s;
-      if (!sp_opt_is_null(arg->spec.precision)) {
-        u32 max = sp_opt_get(arg->spec.precision);
-        if (max < content.len) content.len = max;
+    if (radix != SP_FMT_RADIX_DECIMAL && arg->id != sp_fmt_id_u64 && arg->id != sp_fmt_id_s64) {
+      return SP_ERR_FMT_BAD_ARG;
+    }
+
+    sp_io_mem_writer_from_buffer(&cw, buf, sizeof(buf));
+    switch (arg->id) {
+      case sp_fmt_id_u64:
+        sp_fmt_write_u64_ex(&cw.base, arg->value.u, radix);
+        content = sp_io_mem_writer_as_str(&cw);
+        break;
+      case sp_fmt_id_s64:
+        if (radix == SP_FMT_RADIX_DECIMAL) sp_fmt_write_s64(&cw.base, arg->value.i);
+        else                               sp_fmt_write_u64_ex(&cw.base, (u64)arg->value.i, radix);
+        content = sp_io_mem_writer_as_str(&cw);
+        break;
+      case sp_fmt_id_f64: {
+        u32 p = sp_opt_is_null(arg->spec.precision) ? 6 : sp_opt_get(arg->spec.precision);
+        sp_fmt_write_f64_ex(&cw.base, arg->value.f, p);
+        content = sp_io_mem_writer_as_str(&cw);
+        break;
       }
-      break;
+      case sp_fmt_id_ptr:
+        sp_fmt_write_ptr(&cw.base, arg->value.p);
+        content = sp_io_mem_writer_as_str(&cw);
+        break;
+      case sp_fmt_id_str:
+        content = arg->value.s;
+        if (!sp_opt_is_null(arg->spec.precision)) {
+          u32 max = sp_opt_get(arg->spec.precision);
+          if (max < content.len) content.len = max;
+        }
+        break;
+      case sp_fmt_id_none:
+        break;
     }
-    case sp_fmt_id_custom:
-    case sp_fmt_id_none: break;
   }
 
-  u32 width = arg->spec.width > SP_FMT_WIDTH_MAX ? SP_FMT_WIDTH_MAX : arg->spec.width;
-  u32 pad = (width > content.len) ? (u32)(width - content.len) : 0;
+  u32 pad = (arg->spec.width > content.len) ? (u32)(arg->spec.width - content.len) : 0;
   u8 fill = arg->spec.fill ? arg->spec.fill : ' ';
   sp_fmt_align_t align = arg->spec.align;
   if (align == SP_FMT_ALIGN_NONE) align = SP_FMT_ALIGN_RIGHT;
@@ -15165,24 +18802,44 @@ sp_err_t sp_fmt_render(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* dire
   }
 
   sp_for(it, left_pad) sp_io_write_c8(io, fill);
-
-  sp_for(it, num_dirs) {
-    if (directives[it]->kind != sp_fmt_directive_decorator) continue;
-    sp_fmt_fn_t before = directives[it]->decorator.before;
-    if (before) before(io, arg, args[it]);
+  if (sink) {
+    sp_assert(io == &sink->io->base);
+    u64 opens [SP_FMT_MAX_DIRECTIVES] = sp_zero;
+    u64 closes [SP_FMT_MAX_DIRECTIVES] = sp_zero;
+    sp_for(it, num_dirs) {
+      sp_io_dyn_mem_writer_size(sink->io, &opens[it]);
+      if (arg->spec.directive.styles[it] == sp_fmt_style_quote) sp_io_write_c8(io, '"');
+    }
+    sp_io_write_str(io, content, SP_NULLPTR);
+    u8 j = num_dirs;
+    while (j--) {
+      if (arg->spec.directive.styles[j] == sp_fmt_style_quote) sp_io_write_c8(io, '"');
+      sp_io_dyn_mem_writer_size(sink->io, &closes[j]);
+    }
+    sp_for(it, num_dirs) {
+      sp_fmt_style_t style = arg->spec.directive.styles[it];
+      if (closes[it] > opens[it] && sp_fmt_style_to_ansi(style)) {
+        sp_fmt_span_t span = {
+          .start = sp_cast(u32, opens[it]),
+          .len = sp_cast(u32, closes[it] - opens[it]),
+          .style = style,
+        };
+        sp_da_push(sink->spans, span);
+      }
+    }
   }
-
-  sp_io_write_str(io, content, SP_NULLPTR);
-
-  u8 j = num_dirs;
-  while (j--) {
-    if (directives[j]->kind != sp_fmt_directive_decorator) continue;
-    sp_fmt_fn_t after = directives[j]->decorator.after;
-    if (after) after(io, arg, args[j]);
+  else {
+    sp_for(it, num_dirs) sp_fmt_style_open(io, arg->spec.directive.styles[it], arg);
+    sp_io_write_str(io, content, SP_NULLPTR);
+    u8 j = num_dirs;
+    while (j--) sp_fmt_style_close(io, arg->spec.directive.styles[j]);
   }
-
   sp_for(it, right_pad) sp_io_write_c8(io, fill);
   return SP_OK;
+}
+
+sp_err_t sp_fmt_render(sp_io_writer_t* io, sp_fmt_arg_t* arg) {
+  return sp_fmt_render_ex(io, arg, SP_NULLPTR);
 }
 
 static const c8 sp_fmt_digit_pairs[201] =
@@ -15233,32 +18890,290 @@ c8* sp_fmt_uint_to_buf_hex(u64 value, c8* buf_end) {
   return sp_fmt_uint_to_buf_hex_ex(value, buf_end, "0123456789abcdef");
 }
 
-void sp_fmt_write_u64(sp_io_writer_t* io, u64 value) {
-  c8 buf[20];
-  c8* end = buf + sizeof(buf);
-  c8* start = sp_fmt_uint_to_buf_dec(value, end);
-  sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+c8* sp_fmt_uint_to_buf_bin(u64 value, c8* buf_end) {
+  c8* p = buf_end;
+  if (value == 0) {
+    *--p = '0';
+    return p;
+  }
+  while (value) {
+    *--p = (c8)('0' + (value & 1));
+    value >>= 1;
+  }
+  return p;
 }
 
-void sp_fmt_write_s64(sp_io_writer_t* io, s64 value) {
+c8* sp_fmt_uint_to_buf_oct(u64 value, c8* buf_end) {
+  c8* p = buf_end;
+  if (value == 0) {
+    *--p = '0';
+    return p;
+  }
+  while (value) {
+    *--p = (c8)('0' + (value & 7));
+    value >>= 3;
+  }
+  return p;
+}
+
+sp_err_t sp_fmt_write_u64(sp_io_writer_t* io, u64 value) {
+  return sp_fmt_write_u64_ex(io, value, SP_FMT_RADIX_DECIMAL);
+}
+
+sp_err_t sp_fmt_write_u64_ex(sp_io_writer_t* io, u64 value, sp_fmt_radix_t radix) {
+  c8 buf[64];
+  c8* end = buf + sizeof(buf);
+  c8* start = end;
+  switch (radix) {
+    case SP_FMT_RADIX_DECIMAL:   start = sp_fmt_uint_to_buf_dec(value, end); break;
+    case SP_FMT_RADIX_BINARY:    start = sp_fmt_uint_to_buf_bin(value, end); break;
+    case SP_FMT_RADIX_OCTAL:     start = sp_fmt_uint_to_buf_oct(value, end); break;
+    case SP_FMT_RADIX_HEX:       start = sp_fmt_uint_to_buf_hex(value, end); break;
+    case SP_FMT_RADIX_HEX_UPPER: start = sp_fmt_uint_to_buf_hex_ex(value, end, "0123456789ABCDEF"); break;
+  }
+  return sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+}
+
+sp_str_r sp_fmt_write_u64_mem(sp_mem_t mem, u64 value, sp_fmt_radix_t radix) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_u64_ex(&io.base, value, radix);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_u64_buf(c8* buffer, u64 len, u64 value, sp_fmt_radix_t radix) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_u64_ex(&io.base, value, radix);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_err_t sp_fmt_write_s64(sp_io_writer_t* io, s64 value) {
   c8 buf[21];
   c8* end = buf + sizeof(buf);
-  u64 abs = (value < 0) ? ((u64)(-(value + 1)) + 1) : (u64)value;
+  u64 abs = sp_uabs(value);
   c8* start = sp_fmt_uint_to_buf_dec(abs, end);
   if (value < 0) *--start = '-';
-  sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+  return sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
 }
 
-void sp_fmt_write_ptr(sp_io_writer_t* io, void* value) {
+sp_str_r sp_fmt_write_s64_mem(sp_mem_t mem, s64 value) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_s64(&io.base, value);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_s64_buf(c8* buffer, u64 len, s64 value) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_s64(&io.base, value);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_err_t sp_fmt_write_ptr(sp_io_writer_t* io, void* value) {
   c8 buf[18];
   c8* end = buf + sizeof(buf);
   c8* start = sp_fmt_uint_to_buf_hex((u64)(uintptr_t)value, end);
   *--start = 'x';
   *--start = '0';
+  return sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+}
+
+sp_str_r sp_fmt_write_ptr_mem(sp_mem_t mem, void* value) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_ptr(&io.base, value);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_ptr_buf(c8* buffer, u64 len, void* value) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_ptr(&io.base, value);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+void sp_fmt_write_hex(sp_io_writer_t* io, u64 value) {
+  c8 buf[16];
+  c8* end = buf + sizeof(buf);
+  c8* start = sp_fmt_uint_to_buf_hex(value, end);
   sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
 }
 
-void sp_fmt_write_f64(sp_io_writer_t* io, f64 value, u32 precision) {
+void sp_fmt_write_hex_upper(sp_io_writer_t* io, u64 value) {
+  c8 buf[16];
+  c8* end = buf + sizeof(buf);
+  c8* start = sp_fmt_uint_to_buf_hex_ex(value, end, "0123456789ABCDEF");
+  sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+}
+
+void sp_fmt_write_bin(sp_io_writer_t* io, u64 value) {
+  c8 buf[64];
+  c8* end = buf + sizeof(buf);
+  c8* start = sp_fmt_uint_to_buf_bin(value, end);
+  sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+}
+
+void sp_fmt_write_oct(sp_io_writer_t* io, u64 value) {
+  c8 buf[22];
+  c8* end = buf + sizeof(buf);
+  c8* start = sp_fmt_uint_to_buf_oct(value, end);
+  sp_io_write_all(io, start, (u64)(end - start), SP_NULLPTR);
+}
+
+sp_err_t sp_fmt_write_bool(sp_io_writer_t* io, bool value) {
+  return sp_io_write_cstr(io, value ? "true" : "false", SP_NULLPTR);
+}
+
+sp_str_r sp_fmt_write_bool_mem(sp_mem_t mem, bool value) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_bool(&io.base, value);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_bool_buf(c8* buffer, u64 len, bool value) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_bool(&io.base, value);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_err_t sp_fmt_write_size(sp_io_writer_t* io, u64 bytes) {
+  static const c8* units[] = { "B", "KB", "MB", "GB", "TB", "PB" };
+  u32 unit_idx = 0;
+  u64 whole = bytes;
+  u64 rem = 0;
+  while (whole >= 1024 && unit_idx < 5) {
+    rem = whole & 1023;
+    whole >>= 10;
+    unit_idx++;
+  }
+  sp_try(sp_fmt_write_u64(io, whole));
+  if (unit_idx > 0) {
+    u32 tenths = (u32)((rem * 10) >> 10);
+    if (tenths > 0) {
+      sp_try(sp_io_write_c8(io, '.'));
+      sp_try(sp_io_write_c8(io, (c8)('0' + tenths)));
+    }
+  }
+  sp_try(sp_io_write_c8(io, ' '));
+  return sp_io_write_cstr(io, units[unit_idx], SP_NULLPTR);
+}
+
+sp_str_r sp_fmt_write_size_mem(sp_mem_t mem, u64 bytes) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_size(&io.base, bytes);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_size_buf(c8* buffer, u64 len, u64 bytes) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_size(&io.base, bytes);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_err_t sp_fmt_write_duration(sp_io_writer_t* io, u64 ns) {
+  if (ns < 1000) {
+    sp_try(sp_fmt_write_u64(io, ns));
+    return sp_io_write_cstr(io, " ns", SP_NULLPTR);
+  }
+  static const c8* units[] = { "us", "ms", "s" };
+  u32 unit_idx = 0;
+  u64 whole = ns / 1000;
+  u64 rem = ns % 1000;
+  while (whole >= 1000 && unit_idx < 2) {
+    rem = whole % 1000;
+    whole /= 1000;
+    unit_idx++;
+  }
+  sp_try(sp_fmt_write_u64(io, whole));
+  if (rem >= 100) {
+    sp_try(sp_io_write_c8(io, '.'));
+    sp_try(sp_io_write_c8(io, (c8)('0' + rem / 100)));
+  }
+  sp_try(sp_io_write_c8(io, ' '));
+  return sp_io_write_cstr(io, units[unit_idx], SP_NULLPTR);
+}
+
+sp_str_r sp_fmt_write_duration_mem(sp_mem_t mem, u64 ns) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_duration(&io.base, ns);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_duration_buf(c8* buffer, u64 len, u64 ns) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_duration(&io.base, ns);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_err_t sp_fmt_write_ordinal(sp_io_writer_t* io, s64 value) {
+  sp_try(sp_fmt_write_s64(io, value));
+  u64 abs = sp_uabs(value);
+  u32 mod100 = (u32)(abs % 100);
+  u32 mod10 = (u32)(abs % 10);
+  const c8* suffix = "th";
+  if (mod100 < 11 || mod100 > 13) {
+    if (mod10 == 1) suffix = "st";
+    else if (mod10 == 2) suffix = "nd";
+    else if (mod10 == 3) suffix = "rd";
+  }
+  return sp_io_write_cstr(io, suffix, SP_NULLPTR);
+}
+
+sp_str_r sp_fmt_write_ordinal_mem(sp_mem_t mem, s64 value) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_ordinal(&io.base, value);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_str_r sp_fmt_write_ordinal_buf(c8* buffer, u64 len, s64 value) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_ordinal(&io.base, value);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
+sp_err_t sp_fmt_write_f64(sp_io_writer_t* io, f64 value) {
+  return sp_fmt_write_f64_ex(io, value, 6);
+}
+
+sp_err_t sp_fmt_write_f64_ex(sp_io_writer_t* io, f64 value, u32 precision) {
   union { f64 f; u64 u; } bits;
   bits.f = value;
   u64  exponent = (bits.u >> 52) & 0x7ffULL;
@@ -15267,15 +19182,13 @@ void sp_fmt_write_f64(sp_io_writer_t* io, f64 value, u32 precision) {
 
   if (exponent == 0x7ff) {
     if (mantissa == 0) {
-      sp_io_write_cstr(io, is_neg ? "-inf" : "inf", SP_NULLPTR);
-    } else {
-      sp_io_write_cstr(io, "nan", SP_NULLPTR);
+      return sp_io_write_cstr(io, is_neg ? "-inf" : "inf", SP_NULLPTR);
     }
-    return;
+    return sp_io_write_cstr(io, "nan", SP_NULLPTR);
   }
 
   if (is_neg) {
-    sp_io_write_c8(io, '-');
+    sp_try(sp_io_write_c8(io, '-'));
     value = -value;
   }
 
@@ -15291,8 +19204,7 @@ void sp_fmt_write_f64(sp_io_writer_t* io, f64 value, u32 precision) {
   u64 scale = pow10[precision];
 
   if (value >= 1.8446744073709552e19) {
-    sp_io_write_cstr(io, "inf", SP_NULLPTR);
-    return;
+    return sp_io_write_cstr(io, "inf", SP_NULLPTR);
   }
 
   u64 int_part = (u64)value;
@@ -15303,58 +19215,40 @@ void sp_fmt_write_f64(sp_io_writer_t* io, f64 value, u32 precision) {
     frac_scaled -= scale;
   }
 
-  sp_fmt_write_u64(io, int_part);
+  sp_try(sp_fmt_write_u64(io, int_part));
 
   if (precision > 0) {
-    sp_io_write_c8(io, '.');
+    sp_try(sp_io_write_c8(io, '.'));
     c8 frac_buf[18];
     u32 i = precision;
     while (i--) {
       frac_buf[i] = (c8)('0' + (frac_scaled % 10));
       frac_scaled /= 10;
     }
-    sp_io_write_all(io, frac_buf, precision, SP_NULLPTR);
+    return sp_io_write_all(io, frac_buf, precision, SP_NULLPTR);
   }
+
+  return SP_OK;
 }
 
-void sp_fmt_render_default(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* param) {
-  sp_unused(param);
-  switch (arg->id) {
-    case sp_fmt_id_u64:
-      sp_fmt_write_u64(io, arg->value.u);
-      break;
-    case sp_fmt_id_s64:
-      sp_fmt_write_s64(io, arg->value.i);
-      break;
-    case sp_fmt_id_f64: {
-      u32 p = sp_opt_is_null(arg->spec.precision) ? 6 : sp_opt_get(arg->spec.precision);
-      sp_fmt_write_f64(io, arg->value.f, p);
-      break;
-    }
-    case sp_fmt_id_str: {
-      sp_str_t s = arg->value.s;
-      if (!sp_opt_is_null(arg->spec.precision)) {
-        u32 max = sp_opt_get(arg->spec.precision);
-        if (max < s.len) s.len = max;
-      }
-      sp_io_write_str(io, s, SP_NULLPTR);
-      break;
-    }
-    case sp_fmt_id_ptr: {
-      sp_fmt_write_ptr(io, arg->value.p);
-      break;
-    }
-    case sp_fmt_id_custom: {
-      if (arg->value.custom.fn) {
-        arg->value.custom.fn(io, arg, SP_NULLPTR);
-      }
-      break;
-    }
-    case sp_fmt_id_none: {
-      break;
-    }
-  }
+sp_str_r sp_fmt_write_f64_mem(sp_mem_t mem, f64 value, u32 precision) {
+  sp_str_r str = sp_zero;
+  sp_io_dyn_mem_writer_t io = sp_zero;
+  sp_io_dyn_mem_writer_init(mem, &io);
+  str.err = sp_fmt_write_f64_ex(&io.base, value, precision);
+  if (!str.err) str.value = sp_io_dyn_mem_writer_as_str(&io);
+  return str;
 }
+
+sp_str_r sp_fmt_write_f64_buf(c8* buffer, u64 len, f64 value, u32 precision) {
+  sp_str_r str = sp_zero;
+  sp_io_mem_writer_t io = sp_zero;
+  sp_io_mem_writer_from_buffer(&io, buffer, len);
+  str.err = sp_fmt_write_f64_ex(&io.base, value, precision);
+  if (!str.err) str.value = sp_io_mem_writer_as_str(&io);
+  return str;
+}
+
 sp_str_t sp_fs_get_name(sp_str_t path) {
   // The only valid separator is '/'. If you're calling this function on a path
   // that might contain a '\', normalize it first. Garbage in, garbage out.
@@ -15485,19 +19379,20 @@ sp_str_t sp_fs_join_path(sp_mem_t mem, sp_str_t a, sp_str_t b) {
 
 sp_str_t sp_fs_replace_ext(sp_mem_t mem, sp_str_t path, sp_str_t ext) {
   sp_str_t stripped = sp_str_strip_right(path, sp_fs_get_ext(path));
+  if (sp_str_back(stripped) == '.') stripped.len--;
   return sp_str_empty(ext) ?
     sp_str_copy(mem, stripped) :
-    sp_str_join(mem, path, ext, sp_str_lit("."));
+    sp_str_join(mem, stripped, ext, sp_str_lit("."));
 }
 
-sp_fs_kind_t sp_fs_lstat_kind(sp_str_t path) {
+sp_fs_kind_t sp_fs_get_link_kind(sp_str_t path) {
   if (sp_str_empty(path)) return SP_FS_KIND_NONE;
   sp_sys_file_meta_t st = sp_zero;
   s32 rc = sp_sys_get_link_metadata_s(sp_sys_get_root(0), path, &st);
   return rc == 0 ? st.kind : SP_FS_KIND_NONE;
 }
 
-sp_fs_kind_t sp_fs_stat_kind(sp_str_t path) {
+sp_fs_kind_t sp_fs_get_target_kind(sp_str_t path) {
   if (sp_str_empty(path)) return SP_FS_KIND_NONE;
   sp_sys_file_meta_t st = sp_zero;
   s32 rc = sp_sys_get_path_metadata_s(sp_sys_get_root(0), path, &st);
@@ -15505,35 +19400,31 @@ sp_fs_kind_t sp_fs_stat_kind(sp_str_t path) {
 }
 
 bool sp_fs_exists(sp_str_t path)         {
-  return sp_fs_stat_kind(path)  != SP_FS_KIND_NONE;
+  return sp_fs_get_target_kind(path)  != SP_FS_KIND_NONE;
 }
 
 bool sp_fs_is_file(sp_str_t path)        {
-  return sp_fs_lstat_kind(path) == SP_FS_KIND_FILE;
+  return sp_fs_get_link_kind(path) == SP_FS_KIND_FILE;
 }
 
 bool sp_fs_is_symlink(sp_str_t path)     {
-  return sp_fs_lstat_kind(path) == SP_FS_KIND_SYMLINK;
+  return sp_fs_get_link_kind(path) == SP_FS_KIND_SYMLINK;
 }
 
 bool sp_fs_is_dir(sp_str_t path)         {
-  return sp_fs_lstat_kind(path) == SP_FS_KIND_DIR;
+  return sp_fs_get_link_kind(path) == SP_FS_KIND_DIR;
 }
 
 bool sp_fs_is_target_file(sp_str_t path) {
-  return sp_fs_stat_kind(path)  == SP_FS_KIND_FILE;
+  return sp_fs_get_target_kind(path)  == SP_FS_KIND_FILE;
 }
 
 bool sp_fs_is_target_dir(sp_str_t path)  {
-  return sp_fs_stat_kind(path)  == SP_FS_KIND_DIR;
+  return sp_fs_get_target_kind(path)  == SP_FS_KIND_DIR;
 }
 
 sp_fs_kind_t sp_fs_get_kind(sp_str_t path)        {
-  return sp_fs_lstat_kind(path);
-}
-
-sp_fs_kind_t sp_fs_get_target_kind(sp_str_t path) {
-  return sp_fs_stat_kind(path);
+  return sp_fs_get_link_kind(path);
 }
 
 sp_tm_epoch_t sp_fs_get_mod_time(sp_str_t path) {
@@ -15577,7 +19468,9 @@ sp_str_t sp_fs_resolve(sp_mem_t mem, sp_sys_fd_t fd) {
   if (wlen == 0 || wlen >= SP_PATH_MAX) return sp_zero_s(sp_str_t);
   u32 skip = 0;
   if (wlen >= 4 && wbuf[0] == '\\' && wbuf[1] == '\\' && wbuf[2] == '?' && wbuf[3] == '\\') skip = 4;
-  return sp_wtf16_to_wtf8(mem, (sp_wide_str_t) { .data = wbuf + skip, .len = wlen - skip });
+  sp_str_t resolved;
+  if (sp_wtf16_to_wtf8(mem, (sp_wide_str_t) { .data = wbuf + skip, .len = wlen - skip }, &resolved) != SP_OK) return sp_zero_s(sp_str_t);
+  return resolved;
 
 #elif defined(SP_LINUX)
   c8 self [64] = sp_zero;
@@ -15619,6 +19512,7 @@ sp_str_t sp_fs_get_config_path(sp_mem_t mem) {
 sp_err_t sp_io_read_file(sp_mem_t mem, sp_str_t path, sp_str_t* content) {
   sp_assert(content);
   sp_err_t err = SP_OK;
+  sp_err_t read_err = SP_OK;
   c8* buffer = SP_NULLPTR;
   u64 size = 0;
   u64 bytes_read = 0;
@@ -15630,7 +19524,11 @@ sp_err_t sp_io_read_file(sp_mem_t mem, sp_str_t path, sp_str_t* content) {
   if (!size) goto cleanup;
 
   buffer = sp_alloc_n(mem, c8, size);
-  sp_try_goto(sp_io_read(&reader.base, buffer, size, &bytes_read), err, cleanup);
+  read_err = sp_io_read_all(&reader.base, buffer, size, &bytes_read);
+  if (read_err != SP_OK && read_err != SP_ERR_IO_EOF) {
+    err = read_err;
+    goto cleanup;
+  }
   if (bytes_read < size) {
     buffer = (c8*)sp_realloc(mem, buffer, size, bytes_read);
   }
@@ -15645,9 +19543,9 @@ cleanup:
 }
 
 sp_err_t sp_fs_create_dir(sp_str_t path) {
-  if (sp_str_empty(path)) return SP_ERR_LAZY;
+  if (sp_str_empty(path)) return SP_ERR_SYS_NOT_FOUND;
   if (sp_fs_exists(path)) {
-    return sp_fs_is_dir(path) ? SP_OK : SP_ERR_LAZY;
+    return sp_fs_is_dir(path) ? SP_OK : SP_ERR_SYS_EXISTS;
   }
 
   sp_err_t result = SP_OK;
@@ -15663,8 +19561,11 @@ sp_err_t sp_fs_create_dir(sp_str_t path) {
 
   // Walk back down and create each one
   sp_da_rfor(missing, it) {
-    result = sp_sys_mkdir_s(sp_sys_get_root(0), missing[it], 0755) == 0 ? SP_OK : SP_ERR_OS;
-    if (result && !sp_fs_exists(missing[it])) goto cleanup;
+    result = sp_sys_mkdir_s(sp_sys_get_root(0), missing[it], 0755);
+    if (result) {
+      if (!sp_fs_is_dir(missing[it])) goto cleanup;
+      result = SP_OK;
+    }
   }
 
 cleanup:
@@ -15673,12 +19574,9 @@ cleanup:
 }
 
 sp_err_t sp_fs_create_file(sp_str_t path) {
-  sp_sys_fd_t fd = sp_sys_open_s(sp_sys_get_root(0), path, SP_O_CREAT | SP_O_WRONLY | SP_O_TRUNC, 0644);
-  if (fd != SP_SYS_INVALID_FD) {
-    sp_sys_close(fd);
-  }
-
-  return fd != SP_SYS_INVALID_FD ? SP_OK : SP_ERR_OS;
+  sp_sys_fd_t fd = SP_SYS_INVALID_FD;
+  sp_try(sp_sys_open_s(sp_sys_get_root(0), path, SP_SYS_OPEN_MODE_WO, SP_SYS_OPEN_CREATE | SP_SYS_OPEN_TRUNCATE, &fd));
+  return sp_sys_close(fd);
 }
 
 sp_err_t sp_fs_create_file_slice(sp_str_t path, sp_mem_slice_t slice) {
@@ -15704,17 +19602,11 @@ sp_err_t sp_fs_create_file_cstr(sp_str_t path, const c8* str) {
 }
 
 sp_err_t sp_fs_create_hard_link(sp_str_t target, sp_str_t link_path) {
-  if (sp_sys_link_s(sp_sys_get_root(0), target, sp_sys_get_root(0), link_path)) {
-    return SP_ERR_OS;
-  }
-  return SP_OK;
+  return sp_sys_link_s(sp_sys_get_root(0), target, sp_sys_get_root(0), link_path);
 }
 
 sp_err_t sp_fs_create_sym_link(sp_str_t target, sp_str_t link_path) {
-  if (sp_sys_symlink_s(target, sp_sys_get_root(0), link_path) != 0) {
-    return SP_ERR_OS;
-  }
-  return SP_OK;
+  return sp_sys_symlink_s(target, sp_sys_get_root(0), link_path);
 }
 
 sp_err_t sp_fs_link(sp_str_t from, sp_str_t to, sp_fs_link_kind_t kind) {
@@ -15727,99 +19619,198 @@ sp_err_t sp_fs_link(sp_str_t from, sp_str_t to, sp_fs_link_kind_t kind) {
 }
 
 sp_err_t sp_fs_remove_file(sp_str_t path) {
-  return sp_sys_unlink_s(sp_sys_get_root(0), path) ? SP_ERR_OS : SP_OK;
+  return sp_sys_unlink_s(sp_sys_get_root(0), path);
+}
+
+sp_err_t sp_fs_dir_open(sp_fs_dir_t* it, sp_sys_fd_t fd, sp_str_t path, sp_mem_slice_t buf) {
+  *it = sp_zero_s(sp_fs_dir_t);
+  if (buf.len < SP_SYS_DIR_MIN_BUF) return SP_ERR_SYS_BUG;
+
+  sp_sys_fd_t dir_fd = SP_SYS_INVALID_FD;
+  sp_try(sp_sys_open_dir_s(fd, path, &dir_fd));
+
+  sp_err_t err = sp_sys_dir_from_fd(dir_fd, &it->dir);
+  if (err) {
+    sp_sys_close(dir_fd);
+    return err;
+  }
+
+  it->buf.data = buf.data;
+  it->buf.capacity = buf.len;
+  return SP_OK;
+}
+
+sp_err_t sp_fs_dir_next(sp_fs_dir_t* it, sp_fs_dir_entry_t* out) {
+  *out = sp_zero_s(sp_fs_dir_entry_t);
+
+  while (true) {
+    // Pull another chunk from the kernel and advance the cursor
+    if (it->cursor >= it->buf.len) {
+      sp_try(sp_sys_dir_read(&it->dir, &it->buf));
+      if (!it->buf.len) return SP_OK;
+      it->cursor = 0;
+    }
+
+    sp_sys_dir_entry_t entry = sp_zero;
+    sp_try(sp_sys_dir_parse(&it->dir, &it->buf, &it->cursor, &entry));
+    if (!entry.name) continue;
+
+    sp_str_t name = sp_str(entry.name, entry.len);
+    if (sp_str_equal(name, sp_str_lit(".")) || sp_str_equal(name, sp_str_lit(".."))) continue;
+
+    out->name = name;
+    out->kind = entry.kind;
+    return SP_OK;
+  }
+}
+
+sp_err_t sp_fs_dir_close(sp_fs_dir_t* it) {
+  return sp_sys_dir_close(&it->dir);
+}
+
+void sp_fs_it_unwind(sp_fs_it_t* it) {
+  sp_da_for(it->stack, i) {
+    sp_fs_dir_close(&it->stack[i].dir);
+  }
+  sp_da_clear(it->stack);
 }
 
 void sp_fs_it_push(sp_fs_it_t* it, sp_str_t path) {
   sp_fs_it_frame_t frame = sp_zero;
-  if (sp_sys_fs_it_open_s(sp_sys_get_root(0), &frame.sys, path, sp_mem_slice(frame.buf, SP_FS_IT_BUF_SIZE)) < 0) return;
+  it->err = sp_fs_dir_open(&frame.dir, sp_sys_get_root(0), path, sp_mem_slice(frame.buf, SP_FS_IT_BUF_SIZE));
+  if (it->err) return;
   frame.path = sp_str_copy(it->mem, path);
   sp_da_push(it->stack, frame);
 }
 
 void sp_fs_it_begin(sp_fs_it_t* it, sp_str_t path) {
-  if (sp_str_empty(path) || !sp_fs_is_dir(path)) return;
   sp_fs_it_push(it, path);
+  if (it->err) return;
   sp_fs_it_next(it);
 }
 
 void sp_fs_it_next(sp_fs_it_t* it) {
   while (!sp_da_empty(it->stack)) {
     sp_fs_it_frame_t* top = sp_da_back(it->stack);
-    top->sys.buf.data = top->buf;
+    top->dir.buf.data = top->buf;
 
-    sp_sys_fs_entry_t d;
-    if (sp_sys_fs_it_next(&top->sys, &d) == 0) {
-      it->entry.path = sp_fs_join_path(it->mem, top->path, sp_str(d.name, d.len));
-      it->entry.name = sp_str_sub(it->entry.path, it->entry.path.len - d.len, d.len);
+    sp_fs_dir_entry_t d = sp_zero;
+    it->err = sp_fs_dir_next(&top->dir, &d);
+    if (it->err) {
+      sp_fs_it_unwind(it);
+      return;
+    }
+
+    if (d.name.data) {
+      it->entry.path = sp_fs_join_path(it->mem, top->path, d.name);
+      it->entry.name = sp_str_sub(it->entry.path, it->entry.path.len - d.name.len, d.name.len);
       it->entry.kind = d.kind;
+
+      // If the OS didn't give us a hint, specifically get it from metadata
+      if (it->entry.kind == SP_FS_KIND_NONE) {
+        it->entry.kind = sp_fs_get_link_kind(it->entry.path);
+      }
 
       if (it->recursive && it->entry.kind == SP_FS_KIND_DIR) {
         sp_fs_it_push(it, it->entry.path);
+        if (it->err) sp_fs_it_unwind(it);
       }
       return;
     }
 
-    sp_sys_fs_it_close(&top->sys);
+    it->err = sp_fs_dir_close(&top->dir);
     sp_da_pop(it->stack);
+    if (it->err) {
+      sp_fs_it_unwind(it);
+      return;
+    }
   }
 }
 
 bool sp_fs_it_valid(sp_fs_it_t* it) {
-  return !sp_da_empty(it->stack);
+  return !it->err && !sp_da_empty(it->stack);
 }
 
 void sp_fs_it_deinit(sp_fs_it_t* it) {
   sp_da_for(it->stack, i) {
-    sp_sys_fs_it_close(&it->stack[i].sys);
+    sp_fs_dir_close(&it->stack[i].dir);
   }
   sp_da_free(it->stack);
 }
 
-sp_da(sp_fs_entry_t) sp_fs_collect(sp_mem_t mem, sp_str_t path) {
-  sp_da(sp_fs_entry_t) entries = sp_da_new(mem, sp_fs_entry_t);
+sp_err_t sp_fs_collect(sp_mem_t mem, sp_str_t path, sp_da(sp_fs_entry_t)* out) {
+  *out = sp_da_new(mem, sp_fs_entry_t);
 
-  sp_fs_for(mem, path, it) {
-    sp_da_push(entries, it.entry);
+  sp_fs_it_t it = sp_fs_it_new(mem, path);
+  sp_fs_for_it(it) {
+    sp_da_push(*out, it.entry);
   }
-  return entries;
+  return it.err;
 }
 
-sp_da(sp_fs_entry_t) sp_fs_collect_recursive(sp_mem_t mem, sp_str_t path) {
-  sp_da(sp_fs_entry_t) entries = sp_da_new(mem, sp_fs_entry_t);
+sp_err_t sp_fs_collect_recursive(sp_mem_t mem, sp_str_t path, sp_da(sp_fs_entry_t)* out) {
+  *out = sp_da_new(mem, sp_fs_entry_t);
 
-  sp_fs_for_recursive(mem, path, it) {
-    sp_da_push(entries, it.entry);
+  sp_fs_it_t it = sp_fs_it_new_recursive(mem, path);
+  for (; sp_fs_it_valid(&it); sp_fs_it_next(&it)) {
+    sp_da_push(*out, it.entry);
   }
-  return entries;
+  return it.err;
 }
 
 sp_err_t sp_fs_remove_dir(sp_str_t path) {
+  sp_sys_file_meta_t st = sp_zero;
+  sp_try(sp_sys_get_link_metadata_s(sp_sys_get_root(0), path, &st));
+
+  switch (st.kind) {
+    case SP_FS_KIND_DIR: {
+      break;
+    }
+    case SP_FS_KIND_SYMLINK: {
+      // remove the link itself, never the target; windows directory
+      // symlinks can only be removed as directories, so flip on refusal
+      sp_err_t err = sp_fs_remove_file(path);
+      if (err == SP_ERR_SYS_IS_DIR) err = sp_sys_rmdir_s(sp_sys_get_root(0), path);
+      return err;
+    }
+    default: {
+      return SP_ERR_SYS_NOT_DIR;
+    }
+  }
+
   sp_err_t err = SP_OK;
   sp_mem_arena_marker_t s = sp_mem_begin_scratch();
 
-  sp_da(sp_fs_entry_t) entries = sp_fs_collect(s.mem, path);
+  sp_da(sp_fs_entry_t) entries;
+  err = sp_fs_collect(s.mem, path, &entries);
+  if (err) goto done;
+
   sp_da_for(entries, i) {
     sp_fs_entry_t* entry = &entries[i];
-    switch (entry->kind) {
-      case SP_FS_KIND_FILE:
-      case SP_FS_KIND_SYMLINK: err = sp_fs_remove_file(entry->path); break;
-      case SP_FS_KIND_DIR:     err = sp_fs_remove_dir(entry->path);  break;
-      case SP_FS_KIND_NONE:    err = SP_ERR_OS;                        break;
+
+    // entry kinds are hints; flip on a contradicting error so a lying or
+    // absent d_type can't strand an entry
+    if (entry->kind == SP_FS_KIND_DIR) {
+      err = sp_fs_remove_dir(entry->path);
+      if (err == SP_ERR_SYS_NOT_DIR) err = sp_fs_remove_file(entry->path);
+    }
+    else {
+      err = sp_fs_remove_file(entry->path);
+      if (err == SP_ERR_SYS_IS_DIR) err = sp_fs_remove_dir(entry->path);
     }
     if (err) goto done;
   }
 
-  err = sp_sys_rmdir_s(sp_sys_get_root(0), path) ? SP_ERR_OS : SP_OK;
+  err = sp_sys_rmdir_s(sp_sys_get_root(0), path);
 
 done:
   sp_mem_end_scratch(s);
   return err;
 }
 
-void sp_fs_copy_file(sp_str_t from, sp_str_t to) {
+sp_err_t sp_fs_copy_file_meta(sp_str_t from, sp_str_t to, const sp_sys_file_meta_t* st) {
+  sp_err_t err = SP_OK;
   sp_mem_arena_marker_t s = sp_mem_begin_scratch();
-  sp_sys_file_meta_t st = sp_zero;
   sp_io_file_reader_t reader = sp_zero;
   sp_io_file_writer_t writer = sp_zero;
 
@@ -15827,9 +19818,9 @@ void sp_fs_copy_file(sp_str_t from, sp_str_t to) {
     to = sp_fs_join_path(s.mem, to, sp_fs_get_name(from));
   }
 
-  if (sp_sys_get_path_metadata_s(sp_sys_get_root(0), from, &st)) goto done;
-  if (sp_io_file_reader_from_path(&reader, from)) goto done;
-  if (sp_io_file_writer_from_path(&writer, to)) {
+  sp_try_goto(sp_io_file_reader_from_path(&reader, from), err, done);
+  err = sp_io_file_writer_from_path(&writer, to);
+  if (err) {
     sp_io_file_reader_close(&reader);
     goto done;
   }
@@ -15837,64 +19828,133 @@ void sp_fs_copy_file(sp_str_t from, sp_str_t to) {
   u8 buffer[4096];
   while (true) {
     u64 bytes_read = 0;
-    sp_err_t err = sp_io_read(&reader.base, buffer, sizeof(buffer), &bytes_read);
-    if (bytes_read) sp_io_write_all(&writer.base, buffer, bytes_read, SP_NULLPTR);
-    if (err) break;
+    sp_err_t read_err = sp_io_read(&reader.base, buffer, sizeof(buffer), &bytes_read);
+    if (bytes_read) {
+      err = sp_io_write_all(&writer.base, buffer, bytes_read, SP_NULLPTR);
+      if (err) break;
+    }
+    if (read_err) {
+      if (read_err != SP_ERR_IO_EOF) err = read_err;
+      break;
+    }
   }
-  sp_io_file_reader_close(&reader);
-  sp_io_file_writer_close(&writer);
-  sp_sys_chmod_s(sp_sys_get_root(0), to, &st);
+
+  {
+    sp_err_t close_err = sp_io_file_reader_close(&reader);
+    if (!err) err = close_err;
+    close_err = sp_io_file_writer_close(&writer);
+    if (!err) err = close_err;
+  }
+  if (!err) err = sp_sys_chmod_s(sp_sys_get_root(0), to, st);
 
 done:
   sp_mem_end_scratch(s);
+  return err;
 }
 
-void sp_fs_copy_glob(sp_str_t from, sp_str_t glob, sp_str_t to) {
-  sp_fs_create_dir(to);
+sp_err_t sp_fs_copy_file(sp_str_t from, sp_str_t to) {
+  sp_sys_file_meta_t st = sp_zero;
+  sp_try(sp_sys_get_path_metadata_s(sp_sys_get_root(0), from, &st));
 
+  switch (st.kind) {
+    case SP_FS_KIND_FILE: return sp_fs_copy_file_meta(from, to, &st);
+    case SP_FS_KIND_DIR:  return SP_ERR_SYS_IS_DIR;
+    // opening a fifo for read blocks, and a device has no defined size
+    default:              return SP_ERR_SYS_UNSUPPORTED;
+  }
+}
+
+bool sp_fs_glob_match(sp_str_t name, sp_str_t glob) {
+  u32 n = 0;
+  u32 g = 0;
+  u32 star_n = 0;
+  u32 star_g = 0;
+  bool starred = false;
+
+  while (n < name.len) {
+    if (g < glob.len && glob.data[g] == '*') {
+      starred = true;
+      star_g = ++g;
+      star_n = n;
+    }
+    else if (g < glob.len && glob.data[g] == name.data[n]) {
+      g++;
+      n++;
+    }
+    else if (starred) {
+      g = star_g;
+      n = ++star_n;
+    }
+    else {
+      return false;
+    }
+  }
+
+  while (g < glob.len && glob.data[g] == '*') g++;
+  return g == glob.len;
+}
+
+sp_err_t sp_fs_copy_glob(sp_str_t from, sp_str_t glob, sp_str_t to) {
+  sp_err_t err = SP_OK;
   sp_mem_arena_marker_t s = sp_mem_begin_scratch();
-  sp_da(sp_fs_entry_t) entries = sp_fs_collect(s.mem, from);
+
+  sp_da(sp_fs_entry_t) entries;
+  err = sp_fs_collect(s.mem, from, &entries);
+  if (err) goto done;
+
+  err = sp_fs_create_dir(to);
+  if (err) goto done;
 
   sp_da_for(entries, i) {
     sp_fs_entry_t* entry = &entries[i];
-    sp_str_t entry_name = entry->name;
+    if (!sp_fs_glob_match(entry->name, glob)) continue;
 
-    bool matches = sp_str_equal(glob, sp_str_lit("*"));
-    if (!matches) matches = sp_str_equal(entry_name, glob);
-
-    if (matches) {
-      sp_str_t entry_path = sp_fs_join_path(s.mem, from, entry_name);
-      sp_fs_copy(entry_path, to);
-    }
+    err = sp_fs_copy(entry->path, to);
+    if (err) break;
   }
+
+done:
   sp_mem_end_scratch(s);
+  return err;
 }
 
-void sp_fs_copy_dir(sp_str_t from, sp_str_t to) {
+sp_err_t sp_fs_copy_dir(sp_str_t from, sp_str_t to) {
   if (sp_fs_is_dir(to)) {
     sp_mem_arena_marker_t s = sp_mem_begin_scratch();
     to = sp_fs_join_path(s.mem, to, sp_fs_get_name(from));
-    sp_fs_copy_glob(from, sp_str_lit("*"), to);
+    sp_err_t err = sp_fs_copy_glob(from, sp_str_lit("*"), to);
     sp_mem_end_scratch(s);
-    return;
+    return err;
   }
-  sp_fs_copy_glob(from, sp_str_lit("*"), to);
+  return sp_fs_copy_glob(from, sp_str_lit("*"), to);
 }
 
 sp_err_t sp_fs_copy(sp_str_t from, sp_str_t to) {
   if (sp_fs_is_glob(from)) {
-    sp_fs_copy_glob(sp_fs_parent_path(from), sp_fs_get_name(from), to);
+    return sp_fs_copy_glob(sp_fs_parent_path(from), sp_fs_get_name(from), to);
   }
-  else if (sp_fs_is_target_dir(from)) {
-    SP_ASSERT(sp_fs_is_target_dir(to));
-    sp_mem_arena_marker_t s = sp_mem_begin_scratch();
-    sp_fs_copy_glob(from, sp_str_lit("*"), sp_fs_join_path(s.mem, to, sp_fs_get_name(from)));
-    sp_mem_end_scratch(s);
+
+  sp_sys_file_meta_t meta = sp_zero;
+  sp_try(sp_sys_get_path_metadata_s(sp_sys_get_root(0), from, &meta));
+
+  switch (meta.kind) {
+    case SP_FS_KIND_FILE: {
+      return sp_fs_copy_file_meta(from, to, &meta);
+    }
+    case SP_FS_KIND_DIR: {
+      sp_sys_file_meta_t to_st = sp_zero;
+      sp_try(sp_sys_get_path_metadata_s(sp_sys_get_root(0), to, &to_st));
+      if (to_st.kind != SP_FS_KIND_DIR) return SP_ERR_SYS_NOT_DIR;
+
+      sp_mem_arena_marker_t s = sp_mem_begin_scratch();
+      sp_err_t err = sp_fs_copy_glob(from, sp_str_lit("*"), sp_fs_join_path(s.mem, to, sp_fs_get_name(from)));
+      sp_mem_end_scratch(s);
+      return err;
+    }
+    default: {
+      return SP_ERR_SYS_UNSUPPORTED;
+    }
   }
-  else if (sp_fs_is_target_file(from)) {
-    sp_fs_copy_file(from, to);
-  }
-  return SP_OK;
 }
 
 sp_fs_it_t sp_fs_it_new(sp_mem_t mem, sp_str_t path) {
@@ -15953,41 +20013,21 @@ sp_str_t sp_tm_epoch_to_iso8601(sp_mem_t mem, sp_tm_epoch_t time) {
   return sp_str(buf, 24);
 }
 
-sp_str_t sp_str_reduce(sp_mem_t mem, sp_str_t* strings, u32 num_strings, void* user_data, sp_str_reduce_fn_t fn) {
+sp_str_t sp_str_join_n(sp_mem_t mem, sp_str_t* strings, u32 num_strings, sp_str_t joiner) {
   sp_io_dyn_mem_writer_t io = sp_zero;
   sp_io_dyn_mem_writer_init(mem, &io);
 
-  sp_str_reduce_context_t context = {
-    .user_data = user_data,
-    .writer = &io.base,
-    .elements = {
-      .data = strings,
-      .len = num_strings,
-    },
-  };
-
   sp_for(index, num_strings) {
-    context.str = strings[index];
-    context.index = index;
-    fn(&context);
+    if (sp_str_empty(strings[index])) continue;
+
+    sp_io_write_str(&io.base, strings[index], SP_NULLPTR);
+
+    if (index != (num_strings - 1)) {
+      sp_io_write_str(&io.base, joiner, SP_NULLPTR);
+    }
   }
 
   return sp_io_dyn_mem_writer_as_str(&io);
-}
-
-void sp_str_reduce_kernel_join(sp_str_reduce_context_t* context) {
-  if (sp_str_empty(context->str)) return;
-
-  sp_io_write_str(context->writer, context->str, SP_NULLPTR);
-
-  if (context->index != (context->elements.len - 1)) {
-    sp_str_t joiner = *(sp_str_t*)context->user_data;
-    sp_io_write_str(context->writer, joiner, SP_NULLPTR);
-  }
-}
-
-sp_str_t sp_str_join_n(sp_mem_t mem, sp_str_t* strings, u32 num_strings, sp_str_t joiner) {
-  return sp_str_reduce(mem, strings, num_strings, &joiner, sp_str_reduce_kernel_join);
 }
 
 

@@ -15,8 +15,7 @@ typedef struct {
 
 typedef struct {
   sp_mem_t mem;
-  sp_tty_mode_t saved_mode;
-  bool terminal_modified;
+  sp_sys_tty_state_t saved_mode;
   sp_da(sp_color_t) saved_colors;
   sp_color_t current_color;
   params_t params;
@@ -26,25 +25,26 @@ typedef struct {
   sp_atomic_s32_t shutdown;
 } app_t;
 
+void palette_emit(sp_str_t str) {
+  sp_io_write_str(sp_io_get_std_out(), str, SP_NULLPTR);
+}
+
 void palette_restore_terminal(app_t* app) {
-  if (app && app->terminal_modified) {
-    sp_os_tty_restore(sp_sys_stdin, &app->saved_mode);
-    app->terminal_modified = false;
+  if (app) {
+    sp_tty_restore(sp_sys_stdin, sp_sys_stdout, &app->saved_mode);
   }
-  sp_os_print(sp_str_lit("\033[?25h"));
+  palette_emit(sp_str_lit("\033[?25h"));
 }
 
 void palette_signal_handler(sp_os_signal_t sig, void* userdata) {
   (void)sig;
   app_t* app = (app_t*)userdata;
   palette_restore_terminal(app);
-  sp_atomic_s32_set(&app->shutdown, 1);
+  sp_atomic_s32_store(&app->shutdown, 1, SP_ATOMIC_RELAXED);
 }
 
 void palette_enter_raw_mode(app_t* app) {
-  if (sp_os_tty_enter_raw(sp_sys_stdin, &app->saved_mode) == 0) {
-    app->terminal_modified = true;
-  }
+  sp_tty_set_mode(sp_sys_stdin, sp_sys_stdout, SP_SYS_TTY_MODE_RAW, &app->saved_mode);
 }
 
 u64 palette_rand_next(app_t* app) {
@@ -140,7 +140,7 @@ void palette_render(app_t* app) {
 
   sp_io_write_cstr(&out.base, "[space] regenerate  [enter] save  [q/esc] quit\r\n", SP_NULLPTR);
 
-  sp_os_print(sp_io_dyn_mem_writer_as_str(&out));
+  palette_emit(sp_io_dyn_mem_writer_as_str(&out));
 }
 
 void palette_print_results(app_t* app) {
@@ -152,9 +152,11 @@ void palette_print_results(app_t* app) {
 
 s32 palette_read_key(void) {
   u8 ready = 0;
-  if (sp_sys_fd_ready(sp_sys_stdin, &ready) != 0 || !ready) return -1;
+  if (sp_sys_tty_ready(sp_sys_stdin, &ready) != SP_OK || !ready) return -1;
   c8 c = 0;
-  return sp_sys_read(sp_sys_stdin, &c, 1) == 1 ? c : -1;
+  u64 n = 0;
+  if (sp_sys_read(sp_sys_stdin, &c, 1, &n) != SP_OK || n != 1) return -1;
+  return c;
 }
 
 sp_app_result_t on_init(sp_app_t* sp) {
@@ -165,7 +167,7 @@ sp_app_result_t on_init(sp_app_t* sp) {
   sp_os_register_signal_handler(SP_OS_SIGNAL_INTERRUPT, palette_signal_handler, app);
   sp_os_register_signal_handler(SP_OS_SIGNAL_TERMINATE, palette_signal_handler, app);
 
-  sp_os_print(sp_str_lit("\033[?25l"));
+  palette_emit(sp_str_lit("\033[?25l"));
 
   palette_generate_color(app);
 
@@ -194,7 +196,7 @@ sp_app_result_t on_poll(sp_app_t* app) {
     case 27:
     case 'q':
     case 'Q': {
-      sp_atomic_s32_set(&state->shutdown, 1);
+      sp_atomic_s32_store(&state->shutdown, 1, SP_ATOMIC_RELAXED);
       break;
     }
     default: {
@@ -208,7 +210,7 @@ sp_app_result_t on_poll(sp_app_t* app) {
 sp_app_result_t on_update(sp_app_t* app) {
   app_t* state = (app_t*)app->user_data;
 
-  if (sp_atomic_s32_get(&state->shutdown)) {
+  if (sp_atomic_s32_load(&state->shutdown, SP_ATOMIC_RELAXED)) {
     return SP_APP_QUIT;
   }
   palette_render(state);
@@ -220,7 +222,7 @@ void on_deinit(sp_app_t* sp) {
 
   palette_restore_terminal(app);
 
-  sp_os_print(sp_str_lit("\033[H\033[2J"));
+  palette_emit(sp_str_lit("\033[H\033[2J"));
 
   palette_print_results(app);
 }

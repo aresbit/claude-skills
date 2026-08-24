@@ -48,7 +48,7 @@ sp_free(mem, ptr);                      // Free allocation
 
 // Scratch arena (temporary allocations):
 sp_mem_arena_marker_t mark = sp_mem_begin_scratch();
-sp_str_t msg = sp_fmt(sp_mem_get_scratch(), "hello {}", name);
+sp_str_t msg = sp_fmt(sp_mem_get_scratch(), "hello {}", sp_fmt_str(name)).value;
 sp_mem_end_scratch(mark);               // All scratch memory freed
 ```
 
@@ -71,13 +71,16 @@ sp_str_t copy = sp_str_copy(mem, s);    // Allocated copy
 
 ### Formatting & Logging
 ```c
-// Format strings use {} placeholders — args passed directly, NO wrappers:
-sp_log("Value = {}", x);                    // log to stderr
-sp_print("Hello {}", name);                 // print to stdout
-sp_str_t s = sp_fmt(mem, "x={}, y={}", x, y);  // format to string
-sp_fatal("unrecoverable: {}", err_code);    // log + abort
+// Type-safe format strings use {} placeholders — args MUST be wrapped in sp_fmt_* macros:
+sp_log("Value = {}", sp_fmt_int(x));                    // log to stdout (appends newline)
+sp_print("Hello {}", sp_fmt_str(name));                 // print to stdout (no newline)
+sp_str_t s = sp_fmt(mem, "x={}, y={}", sp_fmt_int(x), sp_fmt_int(y)).value;  // format to string
+sp_fatal("unrecoverable: {}", sp_fmt_int(err_code));    // log + abort
 
-// Format specifiers: {:.2f} {:#x} {:>10} etc.
+// Argument wrappers: sp_fmt_int / sp_fmt_uint / sp_fmt_float / sp_fmt_str / sp_fmt_cstr / sp_fmt_char / sp_fmt_ptr
+// Style directives inside {}: {.red} {.cyan} {.bold} {.italic} — plus sp_fmt_red() etc. as args
+// Spec grammar: [fill/align] [width] [.precision] [renderer]  e.g. {:>10} {:.3} {:x} {.cyan}
+// sp_fmt() returns sp_str_r (a Result) — access the string via .value
 ```
 
 ### Dynamic Arrays
@@ -86,7 +89,7 @@ sp_da(int) arr = SP_NULLPTR;            // Type is sp_da(T), NOT sp_dyn_array(T)
 sp_da_push(arr, 42);                    // Append element
 sp_da_push(arr, 99);
 sp_da_for(arr, i) {                     // Iterate
-  sp_log("arr[{}] = {}", i, arr[i]);
+  sp_log("arr[{}] = {}", sp_fmt_uint(i), sp_fmt_int(arr[i]));
 }
 u64 n = sp_da_size(arr);
 sp_da_free(arr);                        // Free the entire array
@@ -96,12 +99,12 @@ sp_da_free(arr);                        // Free the entire array
 ```c
 // Note: mem is the first parameter
 sp_fs_for(mem, dir, it) {
-  sp_log("Entry: {}", it.entry.name);
+  sp_log("Entry: {}", sp_fmt_str(it.entry.name));
 }
 
 // Recursive directory traversal
 sp_fs_for_recursive(mem, dir, it) {
-  sp_log("Path: {}", it.entry.path);
+  sp_log("Path: {}", sp_fmt_str(it.entry.path));
 }
 ```
 
@@ -145,7 +148,7 @@ sp_try(expr);                    // Return if expr fails (returns sp_err_t)
 sp_try_goto(expr, err, label);   // goto label on failure
 sp_require(ptr != SP_NULLPTR);   // Return if condition false
 SP_ASSERT(condition);            // Assert (calls sp_assert)
-sp_fatal("msg {}", detail);     // Log and abort
+sp_fatal("msg {}", sp_fmt_int(detail));  // Log and abort
 ```
 
 ### Switch Statements
@@ -166,17 +169,19 @@ Search `references/index.md` for detailed API signatures:
 | `sp_str_*` | String operations | `sp_str_lit`, `sp_str_view`, `sp_str_equal`, `sp_str_empty` |
 | `sp_cstr_*` | C string operations | `sp_cstr_len`, `sp_cstr_equal` |
 | `sp_da` / `sp_da_*` | Dynamic arrays | `sp_da(T)`, `sp_da_push`, `sp_da_for`, `sp_da_size` |
+| `sp_arr` | Fixed-capacity array | `sp_arr(T, N)`, `sp_arr_init` |
 | `sp_ht` / `sp_str_ht` / `sp_cstr_ht` | Hash tables | `sp_ht_insert`, `sp_ht_getp`, `sp_str_ht_init` |
 | `sp_alloc` / `sp_free` | Memory allocation | `sp_alloc`, `sp_alloc_n`, `sp_free`, `sp_mem_zero` |
-| `sp_io_*` | File IO | `sp_io_read_file`, `sp_io_write_str` |
-| `sp_fs_*` | Filesystem | `sp_fs_exists`, `sp_fs_for`, `sp_fs_for_recursive` |
+| `sp_io_*` | File IO | `sp_io_read_file`, `sp_io_write_str`, `sp_io_get_std_out` |
+| `sp_fs_*` | Filesystem | `sp_fs_exists`, `sp_fs_for`, `sp_fs_collect` |
 | `sp_ps_*` | Processes | `sp_ps_run`, `sp_ps_create` |
 | `sp_tm_*` | Time | `sp_tm_now_epoch`, `sp_tm_now_point` |
 | `sp_thread_*` | Threads | `sp_thread_init`, `sp_thread_join` |
 | `sp_mutex_*` | Mutexes | `sp_mutex_init`, `sp_mutex_lock` |
-| `sp_env_*` | Environment | `sp_env_get`, `sp_env_set` |
+| `sp_env_*` | Environment | `sp_env_capture`, `sp_env_get`, `sp_env_insert` |
+| `sp_tty_*` / `sp_sys_*` | TTY / low-level sys | `sp_tty_set_mode`, `sp_tty_restore`, `sp_sys_socket_*` |
 | `sp_os_*` | Platform | `sp_os_get_kind`, `sp_os_sleep_ms` |
-| `sp_log` / `sp_print` / `sp_fmt` | Logging/formatting | `sp_log`, `sp_print`, `sp_fmt`, `sp_fatal` |
+| `sp_log` / `sp_print` / `sp_fmt` | Logging/formatting | `sp_log`, `sp_print`, `sp_fmt` (args wrapped in `sp_fmt_*`) |
 
 ## Common Patterns
 
@@ -216,6 +221,7 @@ sp_str_t result = sp_io_dyn_mem_writer_as_str(&w);
 For complete API documentation with full function signatures:
 - **`references/index.md`** - Comprehensive API reference (auto-generated from sp.h upstream)
 - **`include/sp.h`** - The actual single-header library source (authoritative)
+- **`include/sp/*.h`** - Extra module headers (`sp_math`, `sp_elf`, `sp_msvc`, `sp_prompt`, `sp_cli`, `sp_glob`, `sp_http`, `sp_macho`, `sp_asset`, `sp_test`); include them with their own `SP_*_IMPLEMENTATION` macro
 
 ## Examples
 
@@ -254,6 +260,10 @@ CFLAGS += -DSP_PS_DISABLE
 - `sp_str_eq` → 正确：`sp_str_equal`
 - `sp_os_read_entire_file` → 正确：`sp_io_read_file`
 - `sp_dyn_array(T)` / `sp_dyn_array_push` / `sp_dyn_array_for` → 正确：`sp_da(T)` / `sp_da_push` / `sp_da_for`
+- `sp_atomic_s32_get/set` / `sp_atomic_ptr_get/set` → 正确：`sp_atomic_s32_load/store` / `sp_atomic_ptr_load/store`（需传内存序 `SP_ATOMIC_RELAXED` 等）
+- `sp_os_tty_enter_raw` / `sp_os_tty_restore` / `sp_os_print` → 正确：`sp_tty_set_mode` / `sp_tty_restore` / `sp_io_write_str(sp_io_get_std_out(), ...)`
+- `sp_env_set(name, value)` → 正确：`sp_env_insert(&env, name, value)`（先 `sp_env_capture` 获取 env）
+- `sp_str_map` / `sp_str_reduce` → 已移除（"str: kill fake functional shit"）
 
 ### 字符串结构成员
 `sp_str_t` 结构使用 `.data` 成员，而不是 `.ptr`：
@@ -288,16 +298,20 @@ sp_mem_zero(&E, sizeof(E));
 - 读取：`sp_err_t err = sp_io_read_file(mem, path, &content);`（注意第三个参数是输出指针）
 - 写入：使用 `sp_io_file_writer_from_path()` + `sp_io_write_str()` + `sp_io_file_writer_close()`
 
-### 格式化参数无需包裹宏
-sp.h 的格式字符串使用 `{}` 占位，参数直接传入：
+### 格式化参数必须包裹类型宏
+sp.h 的格式字符串使用 `{}` 占位，参数**必须**用 `sp_fmt_*` 宏包裹（这是类型安全的核心）：
 ```c
-// ❌ 错误：sp.h 不存在 SP_FMT_* 宏
-sp_log("Value: {}", SP_FMT_S32(x));
-
-// ✅ 正确：参数直接传入
+// ❌ 错误：裸参数，编译器无法推断类型
 sp_log("Value: {}", x);
-sp_log("Name: {}, Age: {}", name, age);
+
+// ✅ 正确：用 sp_fmt_* 宏包裹，明确类型
+sp_log("Value: {}", sp_fmt_int(x));
+sp_log("Name: {}, Age: {}", sp_fmt_str(name), sp_fmt_uint(age));
+
+// sp_fmt() 返回 sp_str_r（Result 类型），取字符串要用 .value
+sp_str_t s = sp_fmt(mem, "{}", sp_fmt_int(x)).value;
 ```
+可用的包裹宏：`sp_fmt_int` / `sp_fmt_uint` / `sp_fmt_float` / `sp_fmt_str` / `sp_fmt_cstr` / `sp_fmt_char` / `sp_fmt_ptr`，以及颜色/样式宏 `sp_fmt_red()` / `sp_fmt_cyan()` / `sp_fmt_bold()` / `sp_fmt_italic()` 等。
 
 ## Common Mistakes
 
@@ -306,9 +320,9 @@ sp_log("Name: {}, Age: {}", name, age);
 const char* name = "Alice";
 printf("Hello %s\n", name);
 
-// ✅ 正确: 使用sp_str_t + sp_log
+// ✅ 正确: 使用sp_str_t + sp_log（参数用 sp_fmt_str 包裹）
 sp_str_t name = sp_str_lit("Alice");
-sp_log("Hello {}", name);
+sp_log("Hello {}", sp_fmt_str(name));
 
 // ❌ 错误: 手动计算字符串长度
 if (strlen(str) > 0) { ... }
@@ -328,11 +342,11 @@ for (u32 i = 0; i < sp_da_size(arr); i++) { ... }
 // ✅ 正确: 使用遍历宏
 sp_da_for(arr, i) { ... }
 
-// ❌ 错误: 使用不存在的 SP_LOG / SP_FMT_* 宏
-SP_LOG("Value: {}", SP_FMT_STR(name));
-
-// ✅ 正确: 使用小写 sp_log，参数直接传入
+// ❌ 错误: 格式化参数不包裹类型宏（裸参数）
 sp_log("Value: {}", name);
+
+// ✅ 正确: 用小写 sp_log，参数用 sp_fmt_* 宏包裹
+sp_log("Value: {}", sp_fmt_str(name));
 ```
 
 ## Checklist
@@ -347,7 +361,7 @@ sp_log("Value: {}", name);
 - [ ] Switch 语句处理所有枚举值，default 用 `SP_UNREACHABLE_CASE()`
 - [ ] 使用 `sp_da_for()` 或 `sp_carr_for()` 遍历数组
 - [ ] 字符串比较使用 `sp_str_equal()` 而不是 `strcmp()`
-- [ ] 格式化字符串参数直接传入，不使用不存在的 `SP_FMT_*` 包裹宏
+- [ ] 格式化字符串参数用 `sp_fmt_int` / `sp_fmt_str` 等宏包裹（类型安全，裸参数编译不过）
 - [ ] 动态数组类型使用 `sp_da(T)` 而非 `sp_dyn_array(T)`
 
 ## Finding APIs

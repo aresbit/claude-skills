@@ -2,6 +2,8 @@
 
 > Auto-generated from sp.h upstream. Use Ctrl+F to search for specific APIs.
 > All public functions are marked with `SP_API`.
+> Upstream baseline: `aresbit/spclib` commit `81a4ae8f06d0d3a045f6ba94d432c2ef7066c67c` (2026-08-23).
+> To re-sync after upstream changes, clone the repo and run `git diff 81a4ae8..HEAD -- sp.h`.
 
 ## Table of Contents
 
@@ -58,7 +60,7 @@ bool eq = sp_str_equal(s, s2);       // Compare
 Use scratch arenas for temporary allocations:
 ```c
 sp_mem_arena_marker_t mark = sp_mem_begin_scratch();
-sp_str_t msg = sp_fmt(sp_mem_get_scratch(), "hello {}", SP_FMT_STR(name));
+sp_str_t msg = sp_fmt(sp_mem_get_scratch(), "hello {}", sp_fmt_str(name)).value;
 sp_mem_end_scratch(mark);  // All scratch memory freed
 ```
 
@@ -77,6 +79,9 @@ typedef u64      sp_hash_t;
 typedef u64      sp_ht_it_t;
 typedef u64      sp_tm_point_t;
 typedef s32      sp_atomic_s32_t;
+typedef u32      sp_atomic_u32_t;
+typedef s64      sp_atomic_s64_t;
+typedef u64      sp_atomic_u64_t;
 typedef void*    sp_atomic_ptr_t;
 typedef s32      sp_spin_lock_t;
 ```
@@ -318,21 +323,6 @@ SP_API sp_str_t        sp_str_to_lower(sp_mem_t mem, sp_str_t str);
 SP_API sp_str_t        sp_str_to_pascal_case(sp_mem_t mem, sp_str_t str);
 ```
 
-### Map / Reduce
-```c
-SP_API sp_str_t        sp_str_reduce(sp_mem_t mem, sp_str_t* strs, u32 n, void* ud, sp_str_reduce_fn_t fn);
-SP_API void            sp_str_reduce_kernel_join(sp_str_reduce_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_prepend(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_append(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_prefix(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_trim(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_pad(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_to_upper(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_to_lower(sp_str_map_context_t* context);
-SP_API sp_str_t        sp_str_map_kernel_pascal_case(sp_str_map_context_t* context);
-SP_API s32             sp_str_sort_kernel_alphabetical(const void* a, const void* b);
-```
-
 ---
 
 ## C String (sp_cstr)
@@ -355,6 +345,7 @@ SP_API sp_str_t        sp_cstr_as_str(const c8* str);
 ### Type Declaration
 ```c
 sp_da(T) name;    // Dynamic array of type T
+sp_arr(T, N) arr; // Fixed-capacity array (N elements, stack/intrusive header)
 ```
 
 ### Core Operations
@@ -365,9 +356,6 @@ SP_API void* sp_da_grow_ex(void* arr, u32 stride, u64 addlen);
 SP_API void  sp_da_push_ex(void** arr, void* val, u32 stride);
 SP_API sp_da(sp_str_t) sp_str_split_c8(sp_mem_t mem, sp_str_t str, c8 c);
 SP_API sp_da(sp_str_t) sp_str_pad_to_longest(sp_mem_t mem, sp_str_t* strs, u32 n);
-SP_API sp_da(sp_str_t) sp_str_map(sp_mem_t mem, sp_str_t* s, u32 n, void* ud, sp_str_map_fn_t fn);
-SP_API sp_da(sp_fs_entry_t) sp_fs_collect(sp_mem_t mem, sp_str_t path);
-SP_API sp_da(sp_fs_entry_t) sp_fs_collect_recursive(sp_mem_t mem, sp_str_t path);
 ```
 
 ### Macro Operations
@@ -471,11 +459,12 @@ SP_API sp_err_t       sp_io_file_writer_close(sp_io_file_writer_t* w);
 ### Stream Reader/Writer (stdin/stdout/stderr)
 ```c
 SP_API void           sp_io_stream_reader_from_fd(sp_io_stream_reader_t* r, sp_sys_fd_t fd, sp_io_close_mode_t mode);
+SP_API void           sp_io_stream_reader_from_file(sp_io_stream_reader_t* r, sp_sys_fd_t file, sp_io_close_mode_t mode);
 SP_API sp_err_t       sp_io_stream_reader_close(sp_io_stream_reader_t* r);
 SP_API void           sp_io_stream_writer_from_fd(sp_io_stream_writer_t* w, sp_sys_fd_t fd, sp_io_close_mode_t mode);
 SP_API sp_err_t       sp_io_stream_writer_close(sp_io_stream_writer_t* w);
-SP_API void           sp_io_get_std_out(sp_io_stream_writer_t* io);
-SP_API void           sp_io_get_std_err(sp_io_stream_writer_t* io);
+SP_API sp_io_writer_t* sp_io_get_std_out();
+SP_API sp_io_writer_t* sp_io_get_std_err();
 ```
 
 ### Memory Writer
@@ -559,9 +548,9 @@ SP_API sp_err_t             sp_fs_create_hard_link(sp_str_t target, sp_str_t lin
 SP_API sp_err_t             sp_fs_create_sym_link(sp_str_t target, sp_str_t link_path);
 SP_API sp_err_t             sp_fs_link(sp_str_t from, sp_str_t to, sp_fs_link_kind_t kind);
 SP_API sp_err_t             sp_fs_copy(sp_str_t from, sp_str_t to);
-SP_API void                 sp_fs_copy_file(sp_str_t from, sp_str_t to);
-SP_API void                 sp_fs_copy_dir(sp_str_t from, sp_str_t to);
-SP_API void                 sp_fs_copy_glob(sp_str_t from, sp_str_t glob, sp_str_t to);
+SP_API sp_err_t             sp_fs_copy_file(sp_str_t from, sp_str_t to);
+SP_API sp_err_t             sp_fs_copy_dir(sp_str_t from, sp_str_t to);
+SP_API sp_err_t             sp_fs_copy_glob(sp_str_t from, sp_str_t glob, sp_str_t to);
 ```
 
 ### Directory Iterator
@@ -577,6 +566,8 @@ SP_API void                 sp_fs_it_deinit(sp_fs_it_t* it);
 
 ### Directory Collection
 ```c
+SP_API sp_err_t             sp_fs_collect(sp_mem_t mem, sp_str_t path, sp_da(sp_fs_entry_t)* out);
+SP_API sp_err_t             sp_fs_collect_recursive(sp_mem_t mem, sp_str_t path, sp_da(sp_fs_entry_t)* out);
 ```
 
 ### Special Paths
@@ -678,11 +669,10 @@ SP_API s32  sp_thread_launch(void* userdata);
 
 ### Mutex (sp_mutex)
 ```c
-SP_API void sp_mutex_init(sp_mutex_t* mutex, sp_mutex_kind_t kind);
+SP_API void sp_mutex_init(sp_mutex_t* mutex);
 SP_API void sp_mutex_lock(sp_mutex_t* mutex);
 SP_API void sp_mutex_unlock(sp_mutex_t* mutex);
 SP_API void sp_mutex_destroy(sp_mutex_t* mutex);
-SP_API s32  sp_mutex_kind_to_c11(sp_mutex_kind_t kind);
 ```
 
 ### Condition Variable (sp_cv)
@@ -699,6 +689,7 @@ SP_API void sp_cv_notify_all(sp_cv_t* cv);
 ```c
 SP_API void sp_semaphore_init(sp_semaphore_t* semaphore);
 SP_API void sp_semaphore_destroy(sp_semaphore_t* semaphore);
+SP_API bool sp_semaphore_try_wait(sp_semaphore_t* semaphore);
 SP_API void sp_semaphore_wait(sp_semaphore_t* semaphore);
 SP_API bool sp_semaphore_wait_for(sp_semaphore_t* semaphore, u32 ms);
 SP_API void sp_semaphore_signal(sp_semaphore_t* semaphore);
@@ -713,19 +704,32 @@ SP_API void sp_spin_unlock(sp_spin_lock_t* lock);
 ```
 
 ### Atomics (sp_atomic)
+All atomics are `SP_INLINE` wrappers over compiler intrinsics and take a memory order. Types:
+`sp_atomic_s32_t`, `sp_atomic_u32_t`, `sp_atomic_s64_t`, `sp_atomic_u64_t`, `sp_atomic_ptr_t`.
 ```c
-SP_API bool  sp_atomic_s32_cas(sp_atomic_s32_t* value, s32 current, s32 desired);
-SP_API s32   sp_atomic_s32_set(sp_atomic_s32_t* value, s32 desired);
-SP_API s32   sp_atomic_s32_add(sp_atomic_s32_t* value, s32 add);
-SP_API s32   sp_atomic_s32_get(sp_atomic_s32_t* value);
-SP_API bool  sp_atomic_ptr_cas(sp_atomic_ptr_t* value, void* current, void* desired);
-SP_API void* sp_atomic_ptr_set(sp_atomic_ptr_t* value, void* desired);
-SP_API void* sp_atomic_ptr_get(sp_atomic_ptr_t* value);
+// Memory orders:
+SP_ATOMIC_RELAXED  SP_ATOMIC_ACQUIRE  SP_ATOMIC_RELEASE  SP_ATOMIC_ACQ_REL  SP_ATOMIC_SEQ_CST
+
+// Per type (s32/u32/s64/u64/ptr), all take an sp_atomic_order_t order:
+SP_INLINE s32  sp_atomic_s32_load(sp_atomic_s32_t* value, sp_atomic_order_t order);
+SP_INLINE void sp_atomic_s32_store(sp_atomic_s32_t* value, s32 desired, sp_atomic_order_t order);
+SP_INLINE s32  sp_atomic_s32_exchange(sp_atomic_s32_t* value, s32 desired, sp_atomic_order_t order);
+SP_INLINE s32  sp_atomic_s32_add(sp_atomic_s32_t* value, s32 add, sp_atomic_order_t order);   // integers only
+SP_INLINE bool sp_atomic_s32_cas(sp_atomic_s32_t* value, s32 current, s32 desired, sp_atomic_order_t order);
+// ... sp_atomic_u32_*, sp_atomic_s64_*, sp_atomic_u64_* identical; sp_atomic_ptr_* has load/store/exchange/cas.
+SP_INLINE void sp_atomic_fence(sp_atomic_order_t order);
 ```
+Example: `sp_atomic_s32_store(&flag, 1, SP_ATOMIC_RELAXED);`
 
 ---
 
 ## Formatting (sp_fmt)
+
+sp_fmt is **type-safe**: format args MUST be wrapped in `sp_fmt_*` macros so the compiler
+can type-check each `{}` placeholder. `sp_fmt()` returns `sp_str_r` (a `sp_result(sp_str_t)`),
+so access the string via `.value`.
+
+### Core Functions
 ```c
 SP_API sp_str_r  sp_fmt(sp_mem_t mem, const c8* fmt, ...);
 SP_API const c8* sp_fmt_mem_cstr(sp_mem_t mem, const c8* fmt, ...);
@@ -734,29 +738,66 @@ SP_API sp_str_r  sp_fmt_buf(c8* buffer, u64 len, const c8* fmt, ...);
 SP_API sp_str_r  sp_fmt_buf_v(c8* buffer, u64 len, sp_str_t fmt, va_list args);
 SP_API sp_err_t  sp_fmt_io(sp_io_writer_t* io, const c8* fmt, ...);
 SP_API sp_err_t  sp_fmt_io_v(sp_io_writer_t* io, sp_str_t fmt, va_list args);
-SP_API void      sp_fmt_render_default(sp_io_writer_t* io, sp_fmt_arg_t* arg, sp_fmt_arg_t* param);
-SP_API void      sp_fmt_directive_register(const c8* name, sp_fmt_directive_t directive);
+SP_API sp_err_t  sp_fmt_std_out(const c8* fmt, ...);
+SP_API sp_err_t  sp_fmt_std_err(const c8* fmt, ...);
 ```
 
-### Format Macros
+### Argument Wrapper Macros (required)
 ```c
-SP_FMT_S8(val)   // s8
-SP_FMT_S16(val)  // s16
-SP_FMT_S32(val)  // s32
-SP_FMT_S64(val)  // s64
-SP_FMT_U8(val)   // u8
-SP_FMT_U16(val)  // u16
-SP_FMT_U32(val)  // u32
-SP_FMT_U64(val)  // u64
-SP_FMT_F32(val)  // f32
-SP_FMT_F64(val)  // f64
-SP_FMT_CSTR(val) // const c8*
-SP_FMT_STR(val)  // sp_str_t
-SP_FMT_BOOL(val) // bool
-SP_FMT_CHAR(val) // c8
-SP_FMT_PTR(val)  // void*
-SP_FMT_ERR(val)  // sp_err_t
+sp_fmt_int(val)    // s8/s16/s32/s64  -> s64
+sp_fmt_uint(val)   // u8/u16/u32/u64  -> u64
+sp_fmt_float(val)  // f32/f64         -> f64
+sp_fmt_str(val)    // sp_str_t
+sp_fmt_cstr(val)   // const c8*
+sp_fmt_char(val)   // c8
+sp_fmt_ptr(val)    // void*
+sp_fmt_custom(T, fn, val)  // custom type T with renderer fn
 ```
+
+### Style / Color Macros
+```c
+sp_fmt_black()  sp_fmt_red()  sp_fmt_green()  sp_fmt_yellow()  sp_fmt_blue()
+sp_fmt_magenta()  sp_fmt_cyan()  sp_fmt_white()  sp_fmt_gray()
+sp_fmt_br_red()  sp_fmt_br_green()  sp_fmt_br_yellow()  sp_fmt_br_blue()
+sp_fmt_br_magenta()  sp_fmt_br_cyan()  sp_fmt_br_white()
+sp_fmt_bold()  sp_fmt_italic()  sp_fmt_hyperlink()  sp_fmt_quote()
+```
+
+### Styled Output
+```c
+SP_API sp_fmt_styled_r sp_fmt_styled(sp_mem_t mem, const c8* fmt, ...);   // -> {.text, .spans, .err}
+SP_API sp_fmt_styled_r sp_fmt_styled_v(sp_mem_t mem, sp_str_t fmt, va_list args);
+SP_API const c8*       sp_fmt_style_to_ansi(sp_fmt_style_t style);
+SP_API u8              sp_fmt_style_to_ansi_u8(sp_fmt_style_t style);
+```
+
+### Direct Value Writers (sp_fmt_write_*)
+```c
+SP_API sp_err_t  sp_fmt_write_s64(sp_io_writer_t* io, s64 value);
+SP_API sp_err_t  sp_fmt_write_u64(sp_io_writer_t* io, u64 value);
+SP_API sp_err_t  sp_fmt_write_u64_ex(sp_io_writer_t* io, u64 value, sp_fmt_radix_t radix);
+SP_API sp_err_t  sp_fmt_write_f64(sp_io_writer_t* io, f64 value);
+SP_API sp_err_t  sp_fmt_write_f64_ex(sp_io_writer_t* io, f64 value, u32 precision);
+SP_API sp_err_t  sp_fmt_write_ptr(sp_io_writer_t* io, void* value);
+SP_API sp_err_t  sp_fmt_write_bool(sp_io_writer_t* io, bool value);
+SP_API sp_err_t  sp_fmt_write_size(sp_io_writer_t* io, u64 bytes);       // human-readable size
+SP_API sp_err_t  sp_fmt_write_duration(sp_io_writer_t* io, u64 ns);      // human-readable duration
+SP_API sp_err_t  sp_fmt_write_ordinal(sp_io_writer_t* io, s64 value);    // 1st, 2nd, 3rd...
+SP_API void      sp_fmt_write_hex(sp_io_writer_t* io, u64 value);
+SP_API void      sp_fmt_write_hex_upper(sp_io_writer_t* io, u64 value);
+SP_API void      sp_fmt_write_bin(sp_io_writer_t* io, u64 value);
+SP_API void      sp_fmt_write_oct(sp_io_writer_t* io, u64 value);
+// ..._mem / ..._buf variants write into allocated string / fixed buffer and return sp_str_r
+```
+
+### Format Spec Grammar (inside `{...}`)
+```
+[fill + align] [width] [.precision] [renderer] [style directives]
+  align: < ^ >
+  renderer: b (bin) o (oct) x (hex) X (hex-upper) c (char) B (bytes)
+  styles: .red .cyan .bold .italic ...  (space-separated, e.g. {:.2 .cyan})
+```
+Examples: `"{:>10}"` `"{:.3}"` `"{:x}"` `"{.cyan}"` `"{:^16 .cyan}"`
 
 ---
 
@@ -836,8 +877,8 @@ SP_API u32             sp_utf8_num_codepoints(sp_str_t str);
 ## WTF-8/WTF-16
 ```c
 SP_API bool            sp_wtf8_validate(sp_str_t str);
-SP_API sp_wide_str_t   sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8);
-SP_API sp_str_t        sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16);
+SP_API sp_err_t        sp_wtf8_to_wtf16(sp_mem_t mem, sp_str_t wtf8, sp_wide_str_t* out);
+SP_API sp_err_t        sp_wtf16_to_wtf8(sp_mem_t mem, sp_wide_str_t wtf16, sp_str_t* out);
 SP_API sp_wide_str_t sp_wide_str(const u16* str, u32 len);
 ```
 
@@ -872,19 +913,15 @@ SP_API sp_str_t       sp_os_lib_kind_to_extension(sp_os_lib_kind_t kind);
 SP_API sp_str_t       sp_os_lib_to_file_name(sp_mem_t mem, sp_str_t lib, sp_os_lib_kind_t kind);
 SP_API void           sp_os_sleep_ms(f64 ms);
 SP_API void           sp_os_sleep_ns(u64 ns);
-SP_API void           sp_os_print(sp_str_t message);
-SP_API void           sp_os_print_err(sp_str_t message);
 SP_API sp_str_t       sp_os_env_get(sp_str_t key);
 SP_API sp_os_env_it_t sp_os_env_it_begin();
 SP_API bool           sp_os_env_it_valid(sp_os_env_it_t* it);
 SP_API void           sp_os_env_it_next(sp_os_env_it_t* it);
 SP_API void           sp_os_register_signal_handler(sp_os_signal_t, sp_os_signal_handler_t, void* userdata);
-SP_API bool           sp_os_is_tty(sp_sys_fd_t fd);
-SP_API void           sp_os_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows);
-SP_API s32            sp_os_tty_enter_raw(sp_sys_fd_t fd, sp_tty_mode_t* saved);
-SP_API s32            sp_os_tty_restore(sp_sys_fd_t fd, const sp_tty_mode_t* saved);
 SP_API void           sp_os_qsort(void* arr, u64 len, u64 stride, sp_qsort_fn_t);
 ```
+> TTY output/raw-mode moved to `sp_tty_*` / `sp_sys_tty_*`; `sp_os_print`/`sp_os_print_err`
+> removed — write to stdout with `sp_io_write_str(sp_io_get_std_out(), str, SP_NULLPTR)`.
 
 ---
 
@@ -914,38 +951,90 @@ SP_API s32             sp_app_run(sp_app_config_t config);
 
 ## System (sp_sys)
 
-Low-level POSIX/Windows system wrappers. Most users should use `sp_fs_*` / `sp_io_*` instead.
+Low-level POSIX/Windows/NT/WASI syscall wrappers. Most users should use `sp_fs_*` / `sp_io_*`
+instead. All functions now return `sp_err_t` (with out-params) rather than raw `s32`/`s64`.
+A `sp_sys_vtable_t` (set via `sp_sys_set_vtable`) lets you override the platform backend; each
+function also has a `_p` variant that is the resolved function pointer.
 
 ```c
-SP_API void        sp_sys_init();
-SP_API s64         sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count);
-SP_API s64         sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count);
-SP_API s64         sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset);
-SP_API s64         sp_sys_pwrite(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset);
+// Core file IO (all -> sp_err_t, bytes out-param)
+SP_API sp_err_t    sp_sys_read(sp_sys_fd_t fd, void* buf, u64 count, u64* bytes_read);
+SP_API sp_err_t    sp_sys_write(sp_sys_fd_t fd, const void* buf, u64 count, u64* bytes_written);
+SP_API sp_err_t    sp_sys_pread(sp_sys_fd_t fd, void* buf, u64 count, u64 offset, u64* bytes_read);
+SP_API sp_err_t    sp_sys_pwrite(sp_sys_fd_t fd, const void* buf, u64 count, u64 offset, u64* bytes_written);
+SP_API sp_err_t    sp_sys_transfer(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64* bytes_moved);
+SP_API sp_err_t    sp_sys_transfer_positional(sp_sys_fd_t in, u64* in_pos, sp_sys_fd_t out, u64 count, u64 offset, u64* bytes_moved);
+SP_API sp_err_t    sp_sys_open(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_open_mode_t mode, u32 flags, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_open_dir(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_fd_t* out);
+SP_API sp_err_t    sp_sys_close(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_pipe(sp_sys_pipe_t* pipe, sp_sys_pipe_desc_t desc);
+SP_API sp_err_t    sp_sys_pipe_ready(sp_sys_fd_t fd, u8* ready);
+SP_API s64         sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence);
+SP_API sp_err_t    sp_sys_chdir(const c8* path, u32 len);
+
+// Paths / metadata / filesystem ops
 SP_API sp_sys_fd_t sp_sys_get_root(s32 it);
 SP_API s64         sp_sys_get_exe_path(c8* buf, u64 size);
 SP_API s64         sp_sys_get_cwd_path(c8* buf, u64 size);
 SP_API s64         sp_sys_get_storage_path(c8* buf, u64 size);
 SP_API s64         sp_sys_get_config_path(c8* buf, u64 size);
-SP_API sp_sys_fd_t sp_sys_open(sp_sys_fd_t fd, const c8* path, u32 len, s32 flags, s32 mode);
-SP_API s32         sp_sys_close(sp_sys_fd_t fd);
-SP_API s32         sp_sys_pipe(sp_sys_fd_t* read_end, sp_sys_fd_t* write_end);
-SP_API s32         sp_sys_mkdir(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode);
-SP_API s32         sp_sys_rmdir(sp_sys_fd_t fd, const c8* path, u32 len);
-SP_API s32         sp_sys_unlink(sp_sys_fd_t fd, const c8* path, u32 len);
-SP_API s32         sp_sys_rename(sp_sys_fd_t from_fd, const c8* from, u32 from_len, sp_sys_fd_t to_fd, const c8* to, u32 to_len);
-SP_API s32         sp_sys_link(sp_sys_fd_t from_fd, const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
-SP_API s32         sp_sys_symlink(const c8* existing, u32 existing_len, sp_sys_fd_t to_fd, const c8* alias, u32 alias_len);
-SP_API s32         sp_sys_get_path_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_get_link_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_chmod(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts);
-SP_API s32         sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem);
 SP_API s64         sp_sys_canonicalize_path(const c8* path, u32 len, c8* buf, u64 size);
-SP_API s32         sp_sys_fd_ready(sp_sys_fd_t fd, u8* ready);
-SP_API s32         sp_sys_fd_wait(sp_sys_fd_t fd);
-SP_API s32         sp_sys_fds_wait(const sp_sys_fd_t* fds, u8* ready, u64 nfds);
+SP_API sp_err_t    sp_sys_mkdir(sp_sys_fd_t fd, const c8* path, u32 len, s32 mode);
+SP_API sp_err_t    sp_sys_rmdir(sp_sys_fd_t fd, const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_unlink(sp_sys_fd_t fd, const c8* path, u32 len);
+SP_API sp_err_t    sp_sys_rename(sp_sys_fd_t from, const c8* pfrom, u32 lf, sp_sys_fd_t to, const c8* pto, u32 lt);
+SP_API sp_err_t    sp_sys_link(sp_sys_fd_t from, const c8* pfrom, u32 lf, sp_sys_fd_t to, const c8* pto, u32 lt);
+SP_API sp_err_t    sp_sys_symlink(const c8* from, u32 lf, sp_sys_fd_t to, const c8* pto, u32 lt);
+SP_API sp_err_t    sp_sys_get_path_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_link_metadata(sp_sys_fd_t fd, const c8* path, u32 len, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_get_file_metadata(sp_sys_fd_t fd, sp_sys_file_meta_t* st);
+SP_API sp_err_t    sp_sys_chmod(sp_sys_fd_t fd, const c8* path, u32 len, const sp_sys_file_meta_t* st);
+// ...plus _s variants taking sp_str_t (sp_sys_open_s, sp_sys_mkdir_s, sp_sys_rename_s, ...)
+
+// Directory iteration
+SP_API sp_err_t    sp_sys_dir_from_fd(sp_sys_fd_t fd, sp_sys_dir_t* out);
+SP_API sp_err_t    sp_sys_dir_read(sp_sys_dir_t* dir, sp_mem_buffer_t* buf);
+SP_API sp_err_t    sp_sys_dir_parse(sp_sys_dir_t* dir, sp_mem_buffer_t* buf, u64* cursor, sp_sys_dir_entry_t* out);
+SP_API sp_err_t    sp_sys_dir_close(sp_sys_dir_t* dir);
+
+// Time / sync primitives
+SP_API sp_err_t    sp_sys_clock_gettime(s32 clockid, sp_sys_timespec_t* ts);
+SP_API sp_err_t    sp_sys_nanosleep(const sp_sys_timespec_t* req, sp_sys_timespec_t* rem);
+SP_API bool        sp_sys_futex_wait(u32* addr, u32 expected, const sp_sys_timespec_t* timeout);
+SP_API void        sp_sys_futex_wake(u32* addr);
+SP_API void        sp_sys_futex_wake_all(u32* addr);
+SP_API sp_err_t    sp_sys_event_open(sp_sys_event_t* out);
+SP_API sp_err_t    sp_sys_event_signal(sp_sys_event_t event);
+SP_API sp_err_t    sp_sys_event_clear(sp_sys_event_t event);
+SP_API sp_err_t    sp_sys_wait(const sp_sys_fd_t* fds, u64 n, u32 timeout_ms, u64* signaled);
+
+// TTY
+SP_API sp_err_t    sp_sys_tty_get(sp_sys_fd_t fd, sp_sys_tty_attr_t* attr);
+SP_API sp_err_t    sp_sys_tty_set(sp_sys_fd_t fd, const sp_sys_tty_attr_t* attr);
+SP_API sp_err_t    sp_sys_tty_size(sp_sys_fd_t fd, u32* cols, u32* rows);
+SP_API bool        sp_sys_is_tty(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_sys_tty_ready(sp_sys_fd_t fd, u8* ready);
+SP_API sp_err_t    sp_sys_tty_mode_apply(sp_sys_tty_attr_t* in, sp_sys_tty_attr_t* out, sp_sys_tty_mode_t mode);
+SP_API sp_err_t    sp_sys_tty_use_vt(sp_sys_fd_t fd);
+SP_API sp_err_t    sp_tty_set_mode(sp_sys_fd_t in, sp_sys_fd_t out, sp_sys_tty_mode_t mode, sp_sys_tty_state_t* saved);
+SP_API sp_err_t    sp_tty_restore(sp_sys_fd_t in, sp_sys_fd_t out, const sp_sys_tty_state_t* saved);
+
+// Sockets
+SP_API sp_err_t    sp_sys_socket_open(sp_sys_socket_t* out, sp_sys_handle_desc_t desc);
+SP_API sp_err_t    sp_sys_socket_bind(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+SP_API sp_err_t    sp_sys_socket_listen(sp_sys_socket_t socket, u32 backlog);
+SP_API sp_err_t    sp_sys_socket_connect(sp_sys_socket_t socket, sp_sys_ipv4_t addr);
+SP_API sp_err_t    sp_sys_socket_error(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_accept(sp_sys_socket_t listener, sp_sys_handle_desc_t desc, sp_sys_socket_t* out);
+SP_API sp_err_t    sp_sys_socket_close(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_recv(sp_sys_socket_t socket, void* buf, u64 count, u64* bytes_read);
+SP_API sp_err_t    sp_sys_socket_send(sp_sys_socket_t socket, const void* buf, u64 count, u64* bytes_written);
+SP_API sp_err_t    sp_sys_socket_wait(sp_sys_socket_t socket, bool readable, u32 timeout_ms);
+SP_API sp_err_t    sp_sys_socket_set_nonblocking(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_reuse_addr(sp_sys_socket_t socket);
+SP_API sp_err_t    sp_sys_socket_local_port(sp_sys_socket_t socket, u16* out);
+
+// Libc shims (freestanding)
 SP_API void*       sp_sys_alloc(u64 size);
 SP_API void        sp_sys_free(void* ptr, u64 size);
 SP_API void*       sp_sys_memcpy(void* dest, const void* src, u64 n);
@@ -955,26 +1044,13 @@ SP_API s32         sp_sys_memcmp(const void* a, const void* b, u64 n);
 SP_API void        sp_sys_assert(bool cond);
 SP_API void        sp_sys_exit(s32 code);
 SP_API void        sp_sys_env(const c8** env, u32* len);
-SP_API s64         sp_sys_lseek(sp_sys_fd_t fd, s64 offset, s32 whence);
-SP_API s32         sp_sys_chdir(const c8* path, u32 len);
-SP_API sp_sys_fd_t sp_sys_open_s(sp_sys_fd_t fd, sp_str_t path, s32 flags, s32 mode);
-SP_API s32         sp_sys_get_path_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_get_link_metadata_s(sp_sys_fd_t fd, sp_str_t path, sp_sys_file_meta_t* st);
-SP_API s32         sp_sys_mkdir_s(sp_sys_fd_t fd, sp_str_t path, s32 mode);
-SP_API s32         sp_sys_rmdir_s(sp_sys_fd_t fd, sp_str_t path);
-SP_API s32         sp_sys_unlink_s(sp_sys_fd_t fd, sp_str_t path);
-SP_API s32         sp_sys_rename_s(sp_sys_fd_t from_fd, sp_str_t from, sp_sys_fd_t to_fd, sp_str_t to);
-SP_API s32         sp_sys_chdir_s(sp_str_t path);
-SP_API s32         sp_sys_link_s(sp_sys_fd_t from_fd, sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias);
-SP_API s32         sp_sys_symlink_s(sp_str_t existing, sp_sys_fd_t to_fd, sp_str_t alias);
-SP_API s32         sp_sys_chmod_s(sp_sys_fd_t fd, sp_str_t path, const sp_sys_file_meta_t* st);
-SP_API s64         sp_sys_canonicalize_path_s(sp_str_t path, c8* buf, u64 size);
-SP_API s32         sp_sys_fs_it_open(sp_sys_fd_t fd, sp_sys_fs_it_t* it, const c8* path, u32 path_len, void* buf, u64 cap);
-SP_API s32         sp_sys_fs_it_open_s(sp_sys_fd_t fd, sp_sys_fs_it_t* it, sp_str_t path, sp_mem_slice_t buf);
-SP_API s32         sp_sys_fs_it_next(sp_sys_fs_it_t* it, sp_sys_fs_entry_t* out);
-SP_API void        sp_sys_fs_it_close(sp_sys_fs_it_t* it);
-SP_API sp_nt_status_t sp_sys_nt_path(sp_str_t utf8, sp_sys_nt_path_t* out);
-SP_API void           sp_sys_nt_path_free(sp_sys_nt_path_t* path);
+
+// Backend / capability
+SP_API const sp_sys_vtable_t* sp_sys_set_vtable(const sp_sys_vtable_t* vt);
+SP_API const sp_sys_vtable_t  sp_sys_vtable_platform;
+SP_API sp_err_t    sp_sys_is_supported(u32 what);
+SP_API void        sp_sys_mark_supported(u32 what);
+SP_API sp_err_t    sp_sys_mark_unsupported(u32 what);
 ```
 
 ---
@@ -1006,12 +1082,12 @@ SP_API void sp_assert_f(sp_str_t file, sp_str_t line, sp_str_t func, sp_str_t ex
 | Free memory | `sp_free(mem, ptr)` |
 | Scratch arena begin | `sp_mem_begin_scratch()` |
 | Scratch arena end | `sp_mem_end_scratch(mark)` |
-| Format string | `sp_fmt(mem, "{}", SP_FMT_STR(s))` |
-| Log message | `sp_log("msg {}", ...)` |
-| Print message | `sp_print("msg {}", ...)` |
+| Format string | `sp_fmt(mem, "{}", sp_fmt_str(s)).value` |
+| Log message | `sp_log("msg {}", sp_fmt_int(n))` |
+| Print message | `sp_print("msg {}", sp_fmt_str(s))` |
 | Read file | `sp_io_read_file(mem, path, &content)` |
 | Write to stdout | `sp_io_write_str(writer, str, &n)` |
-| Get stdout writer | `sp_io_get_std_out(&writer)` |
+| Get stdout writer | `sp_io_get_std_out()` |
 | Check path exists | `sp_fs_exists(path)` |
 | Join paths | `sp_fs_join_path(mem, a, b)` |
 | Create directory | `sp_fs_create_dir(path)` |
